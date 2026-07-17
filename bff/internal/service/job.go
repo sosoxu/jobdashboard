@@ -269,29 +269,63 @@ type NameFailure struct {
 	Reason string `json:"reason"`
 }
 
-// Control executes a control action. For suspend/resume (no upstream API yet)
-// it returns an error indicating the interface is pending.
-func (s *JobService) Control(ctx context.Context, action ControlAction, names []string) (*ControlResult, error) {
+// Control 执行作业控制操作。currentUser 为当前登录用户名；只能控制自己提交
+// 的作业（作业 userName 与 currentUser 一致），他人作业会被拒绝并放入 Failed。
+// 作业归属校验依赖内存缓存，缓存不可用时拒绝执行以防误操作。
+func (s *JobService) Control(ctx context.Context, action ControlAction, names []string, currentUser string) (*ControlResult, error) {
 	if len(names) == 0 {
 		return nil, fmt.Errorf("names is empty")
 	}
+	if currentUser == "" {
+		return nil, fmt.Errorf("未登录")
+	}
 	switch action {
-	case ActionDelete:
-		if err := s.client.Delete(ctx, names); err != nil {
-			return nil, err
-		}
-	case ActionRerun:
-		if err := s.client.Rerunmulti(ctx, names); err != nil {
-			return nil, err
-		}
+	case ActionDelete, ActionRerun:
 	case ActionSuspend, ActionResume:
 		return nil, fmt.Errorf("接口待提供：暂停/恢复接口尚未由上游服务实现")
 	default:
 		return nil, fmt.Errorf("unknown action: %s", action)
 	}
-	// Upstream returns aggregate success/failure; without per-name detail we
-	// report all as success.
-	return &ControlResult{Success: append([]string{}, names...)}, nil
+
+	if err := s.ensureFresh(ctx); err != nil {
+		return nil, fmt.Errorf("无法校验作业归属，请稍后重试: %w", err)
+	}
+	jobs, _ := s.cache.Snapshot()
+	owner := make(map[string]string, len(jobs))
+	for i := range jobs {
+		owner[jobs[i].JobName] = jobs[i].UserName
+	}
+
+	var mine []string
+	failed := make([]NameFailure, 0)
+	for _, n := range names {
+		u, ok := owner[n]
+		if !ok {
+			failed = append(failed, NameFailure{Name: n, Reason: "作业不存在"})
+			continue
+		}
+		if u != currentUser {
+			failed = append(failed, NameFailure{Name: n, Reason: "无权操作他人作业"})
+			continue
+		}
+		mine = append(mine, n)
+	}
+
+	success := make([]string, 0)
+	if len(mine) > 0 {
+		switch action {
+		case ActionDelete:
+			if err := s.client.Delete(ctx, mine); err != nil {
+				return nil, err
+			}
+		case ActionRerun:
+			if err := s.client.Rerunmulti(ctx, mine); err != nil {
+				return nil, err
+			}
+		}
+		success = append(success, mine...)
+	}
+	return &ControlResult{Success: success, Failed: failed}, nil
 }
 
 // --- helpers ---

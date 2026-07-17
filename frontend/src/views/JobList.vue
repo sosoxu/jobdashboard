@@ -66,6 +66,9 @@
             @keyup.enter="onSearch"
           />
         </el-form-item>
+        <el-form-item label="仅我的">
+          <el-switch v-model="onlyMine" @change="onOnlyMineChange" />
+        </el-form-item>
         <el-form-item>
           <el-button type="primary" :icon="Search" @click="onSearch">查询</el-button>
           <el-button :icon="RefreshLeft" @click="onReset">重置</el-button>
@@ -154,13 +157,34 @@
                 <el-button size="small" disabled>暂停</el-button>
               </span>
             </el-tooltip>
-            <el-button size="small" type="danger" @click="onControl('delete', [row.jobName])">停止</el-button>
-            <el-button
-              size="small"
-              type="warning"
-              :disabled="!canRerun(row.jobStatus)"
-              @click="onControl('rerun', [row.jobName])"
-            >重试</el-button>
+            <el-tooltip
+              :content="canControl(row as JobListItem) ? '' : '无权操作他人作业'"
+              placement="top"
+              :disabled="canControl(row as JobListItem)"
+            >
+              <span>
+                <el-button
+                  size="small"
+                  type="danger"
+                  :disabled="!canControl(row as JobListItem)"
+                  @click="onControl('delete', [row.jobName])"
+                >停止</el-button>
+              </span>
+            </el-tooltip>
+            <el-tooltip
+              :content="retryTooltip(row as JobListItem)"
+              placement="top"
+              :disabled="canControl(row as JobListItem) && canRerun(row.jobStatus)"
+            >
+              <span>
+                <el-button
+                  size="small"
+                  type="warning"
+                  :disabled="!canControl(row as JobListItem) || !canRerun(row.jobStatus)"
+                  @click="onControl('rerun', [row.jobName])"
+                >重试</el-button>
+              </span>
+            </el-tooltip>
             <el-button size="small" text type="primary" @click="viewLogs(row as JobListItem)">日志</el-button>
           </template>
         </el-table-column>
@@ -193,8 +217,10 @@ import { STATUS_OPTIONS, stateMeta, JobState } from '@/composables/useJobStatus'
 import { getJobs, getJobFilters, controlJobs } from '@/api/job'
 import type { JobListItem, JobFilters } from '@/api/types'
 import { fmtTime, fmtDuration } from '@/utils/format'
+import { useUserStore } from '@/stores/user'
 
 const router = useRouter()
+const userStore = useUserStore()
 
 const jobs = ref<JobListItem[]>([])
 const total = ref(0)
@@ -204,6 +230,10 @@ const pageSize = ref(20)
 const selection = ref<JobListItem[]>([])
 const tableRef = ref<TableInstance>()
 const expandedJobName = ref<string>('')
+
+// When enabled, the query is restricted to the current user's jobs,
+// overriding the multi-select userName filter below.
+const onlyMine = ref(false)
 
 // Multi-select filter values. Status is number[] (enum codes); the rest are
 // string[] populated from the /jobs/filters endpoint.
@@ -229,13 +259,15 @@ async function loadFilters() {
 async function load() {
   loading.value = true
   try {
+    const userNameParam =
+      onlyMine.value && userStore.username ? [userStore.username] : filter.userName
     const r = await getJobs({
       page: page.value,
       pageSize: pageSize.value,
       jobStatus: filter.jobStatus.length ? filter.jobStatus : undefined,
       project: filter.project.length ? filter.project : undefined,
       survey: filter.survey.length ? filter.survey : undefined,
-      userName: filter.userName.length ? filter.userName : undefined,
+      userName: userNameParam.length ? userNameParam : undefined,
       jobDesc: filter.jobDesc || undefined,
     })
     jobs.value = r.list
@@ -257,6 +289,11 @@ function onReset() {
   filter.survey = []
   filter.userName = []
   filter.jobDesc = ''
+  onlyMine.value = false
+  page.value = 1
+  void load()
+}
+function onOnlyMineChange() {
   page.value = 1
   void load()
 }
@@ -266,6 +303,18 @@ function onSizeChange() {
 }
 function onSelectionChange(rows: JobListItem[]) {
   selection.value = rows
+}
+
+// Permission: only the job's owner may control (stop/rerun) it.
+function canControl(row: JobListItem): boolean {
+  return !!userStore.username && row.userName === userStore.username
+}
+
+// Tooltip text for the rerun button depending on why it is disabled.
+function retryTooltip(row: JobListItem): string {
+  if (!canControl(row)) return '无权操作他人作业'
+  if (!canRerun(row.jobStatus)) return '当前状态不可重试'
+  return ''
 }
 
 // Accordion: only one row expanded at a time.
@@ -309,7 +358,14 @@ async function onControl(action: 'delete' | 'rerun', names: string[]) {
 }
 
 function onBatch(action: 'delete' | 'rerun') {
-  const names = selection.value.map((j) => j.jobName)
+  // Only the current user's own jobs can be controlled; filter out jobs
+  // belonging to others and warn if nothing remains.
+  const own = selection.value.filter((j) => canControl(j))
+  if (own.length === 0) {
+    ElMessage.warning('请选择您自己的作业')
+    return
+  }
+  const names = own.map((j) => j.jobName)
   void onControl(action, names)
 }
 

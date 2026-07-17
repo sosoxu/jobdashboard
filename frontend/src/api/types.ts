@@ -1,3 +1,12 @@
+export interface AuthUser {
+  username: string
+}
+
+export interface AuthResult {
+  token: string
+  user: AuthUser
+}
+
 export interface GroupStat {
   key: string
   label: string

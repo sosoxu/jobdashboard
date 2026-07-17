@@ -55,14 +55,16 @@ type controlReq struct {
 	Names  []string `json:"names" binding:"required"`
 }
 
-// POST /api/v1/jobs/control
+// POST /api/v1/jobs/control  （需登录；只能控制自己提交的作业）
 func (h *JobHandler) Control(c *gin.Context) {
 	var req controlReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		failBadRequest(c, "参数错误: "+err.Error())
 		return
 	}
-	res, err := h.jobs.Control(c.Request.Context(), service.ControlAction(req.Action), req.Names)
+	username, _ := c.Get("username")
+	user, _ := username.(string)
+	res, err := h.jobs.Control(c.Request.Context(), service.ControlAction(req.Action), req.Names, user)
 	if err != nil {
 		failBadRequest(c, err.Error())
 		return

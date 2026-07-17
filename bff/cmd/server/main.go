@@ -47,6 +47,7 @@ func main() {
 
 	statsRepo := store.NewStatsRepo(db)
 	userRepo := store.NewUserRepo(db)
+	authRepo := store.NewAuthRepo(db)
 
 	// Upstream client.
 	client := upstream.New(cfg.Upstream.JobServiceURL, cfg.Upstream.TimeoutSec)
@@ -60,6 +61,7 @@ func main() {
 	resolver := logpath.New(cfg.Log.NgpEnv, cfg.Log.ProjectsConfRel, logger)
 	logSvc := service.NewLogService(resolver, cfg.Log.MaxLogLines)
 	analyzer := service.NewRuleAnalyzer()
+	authSvc := service.NewAuthService(authRepo, cfg.Auth.JWTSecret, cfg.Auth.TokenTTLHour)
 
 	// Sampler scheduler.
 	sched := sampler.New(logger)
@@ -93,12 +95,20 @@ func main() {
 	r.Use(ginLogger(logger))
 
 	api := r.Group("/api/v1")
+
+	// 公开路由：注册/登录
+	authH := handler.NewAuthHandler(authSvc)
+	handler.RegisterAuthRoutes(api, authH)
+
+	// 受保护路由：需登录（携带 Authorization Bearer token）
+	protected := api.Group("")
+	protected.Use(handler.AuthMiddleware(authSvc))
 	dashH := handler.NewDashboardHandler(statsSvc)
 	jobH := handler.NewJobHandler(jobSvc)
 	logH := handler.NewLogHandler(logSvc, analyzer)
-	handler.RegisterDashboardRoutes(api, dashH)
-	handler.RegisterJobRoutes(api, jobH)
-	handler.RegisterLogRoutes(api, logH)
+	handler.RegisterDashboardRoutes(protected, dashH)
+	handler.RegisterJobRoutes(protected, jobH)
+	handler.RegisterLogRoutes(protected, logH)
 
 	// Health check.
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })

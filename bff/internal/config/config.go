@@ -14,6 +14,7 @@ type Config struct {
 	Sampler  SamplerCfg  `yaml:"sampler"`
 	Log      LogCfg      `yaml:"log"`
 	AI       AICfg       `yaml:"ai"`
+	Auth     AuthCfg     `yaml:"auth"`
 	Storage  StorageCfg  `yaml:"storage"`
 }
 
@@ -51,6 +52,12 @@ type AICfg struct {
 
 type StorageCfg struct {
 	SqlitePath string `yaml:"sqlitePath"`
+}
+
+// AuthCfg 控制登录鉴权。JWTSecret 为空时使用内置兜底值（仅适合测试）。
+type AuthCfg struct {
+	JWTSecret    string `yaml:"jwtSecret"`
+	TokenTTLHour int    `yaml:"tokenTTLHour"`
 }
 
 var (
@@ -111,5 +118,8 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Storage.SqlitePath == "" {
 		c.Storage.SqlitePath = "./data/dashboard.db"
+	}
+	if c.Auth.TokenTTLHour == 0 {
+		c.Auth.TokenTTLHour = 72
 	}
 }

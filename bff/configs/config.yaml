@@ -1,0 +1,29 @@
+server:
+  port: 18088
+
+upstream:
+  jobServiceURL: "http://130.1.100.152:18080/job/call"
+  timeoutSec: 10
+
+sampler:
+  enabled: true
+  jsfIntervalSec: 60
+  jobIntervalSec: 60
+  jobPageSize: 500
+  jobPageSleepMs: 100
+  retainDays: 30
+
+log:
+  ngpEnv: "NGP"
+  projectsConfRel: "configs/ndp/projects.conf"
+  maxLogLines: 5000
+
+ai:
+  enabled: false
+  provider: ""
+  endpoint: ""
+  apiKey: ""
+  model: ""
+
+storage:
+  sqlitePath: "./data/dashboard.db"

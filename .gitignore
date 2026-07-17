@@ -1,0 +1,25 @@
+# Go
+bff/bin/
+bff/data/
+bff/web/dist/
+*.db
+*.db-*
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/auto-imports.d.ts
+frontend/components.d.ts
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Test artifacts
+/tmp/
+*.png
+
+# Compiled binaries
+test/mock-job-service/mock-job-service
+

@@ -114,9 +114,6 @@ func (c *Client) GetJob(ctx context.Context, p GetJobParams) (*GetJobResult, err
 	if p.Size <= 0 {
 		p.Size = 10
 	}
-	if p.FilterType == 0 {
-		p.FilterType = 1
-	}
 	params := map[string]any{
 		"type":            2,
 		"offset":          p.Offset,

@@ -91,17 +91,28 @@ export interface ControlResult {
 }
 
 export interface LogLine {
-  level: string
-  ts: string
-  msg: string
+  lineNo: number
+  text: string
+}
+
+export interface LogSection {
+  name: string
+  lineNo: number
 }
 
 export interface LogResult {
   jobName: string
   type: string
   path: string
+  page: number
+  pageSize: number
+  total: number       // -1 表示未知
   lines: LogLine[]
   truncated: boolean
+  files: string[]
+  filtered: boolean
+  cached: boolean
+  sections: LogSection[] | null  // list 文件的段落列表；log 类型为 null
 }
 
 export interface ModuleError {

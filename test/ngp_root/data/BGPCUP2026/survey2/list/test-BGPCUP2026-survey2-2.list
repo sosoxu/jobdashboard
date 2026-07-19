@@ -1,0 +1,171 @@
+
+ ZZZZZZ  L     M    M         TTTTT EEEEEE  SSSS   TTTTT        W    W    *   
+      Z  L     MM  MM           T   E      S    S    T          W    W  * * * 
+     Z   L     M MM M ------    T   E      S         T   ------ W    W   ***  
+   Z     L     M    M ------    T   EEEEEE SSSSSS    T   ------ W    W    *   
+  Z      L     M    M           T   E           S    T          W WW W   ***  
+ Z       L     M    M           T   E      S    S    T          WW  WW  * * * 
+ ZZZZZZ  LLLLL M    M           T   EEEEEE  SSSS     T          W    W    *   
+
+       -----  NGP V1.0   -----
+
+Job ListName : test-BGPCUP2026-survey2.job.5561.J1784110200000.list
+Project      : BGPCUP2026
+Survey       : survey2
+Line         : 
+Database Name: ndp_check
+User         : testuser
+Sending Host : 
+Running Host : hp6c79-054
+Start   Time : 2026-07-15 10:10:00
+
+ ===  Start of Job Code  === 
+    
+--------------------
+GeoDiskIn
+--------------------
+    
+                 #: Filename of the input seismic data.
+        > Filename = 02-STAPPLY-FIELD,Null,survey2,BGPCUP2026...
+                 #:  The first keyword pertains to seismic data index.
+        > First keyword code = Source
+                 #:  Selection range of the first keyword. 
+        > First keyword range = 18001,18002,1,0,0...
+                 #:  The second keyword pertains to seismic data index.
+        > Second keyword code = Trace
+                 #:  Selection range of the second keyword. 
+        > Second keyword range = 0,0,0...
+                 #: Set the flag when a gather is input. 
+        > Gather flag = Source
+                 #: Select the input seismic trace type.
+        > Trace type = 1 Valid trace
+                 #:  The same input range is used when multi-file input is set.
+        > Use same range for all files = Yes
+                 #: Select the time range of the input traces.
+        > Time window input = 0,0,0
+                 #: Select head word by non-sorting keywords,so as to select the input data.
+        > Select header word = Null
+                 #: Select header word range by non-sorting keywords,so as to select the input data.
+        > Select header range = 0,0,0...
+                 #: must be in front of one of the 1-5 keywords.
+        > Random select keyword = Null
+                 #: Random input range.
+        > Random select range = -9999,-9999,-9999...
+                 #: Option to input the data whether in multiple traces.
+        > Gather input = No
+                 #: Used to recreate index table,required by the seismic data has not been built successfully.
+        > Recreate index = No
+                 #: Only load trace header file option.
+        > Header only = No
+    
+--------------------
+GeoDiskOut
+--------------------
+    
+                 #: Filename of the input seismic data.
+        > Filename = 02-STAPPLY-FIELD,Null,survey2,BGPCUP2026...
+                 #:  The first keyword pertains to seismic data index.
+        > First keyword code = Source
+                 #:  Selection range of the first keyword. 
+        > First keyword range = 18001,18002,1,0,0...
+                 #:  The second keyword pertains to seismic data index.
+        > Second keyword code = Trace
+                 #:  Selection range of the second keyword. 
+        > Second keyword range = 0,0,0...
+                 #: Set the flag when a gather is input. 
+        > Gather flag = Source
+                 #: Select the input seismic trace type.
+        > Trace type = 1 Valid trace
+                 #:  The same input range is used when multi-file input is set.
+        > Use same range for all files = Yes
+                 #: Select the time range of the input traces.
+        > Time window input = 0,0,0
+                 #: Select head word by non-sorting keywords,so as to select the input data.
+        > Select header word = Null
+                 #: Select header word range by non-sorting keywords,so as to select the input data.
+        > Select header range = 0,0,0...
+                 #: must be in front of one of the 1-5 keywords.
+        > Random select keyword = Null
+                 #: Random input range.
+        > Random select range = -9999,-9999,-9999...
+                 #: Option to input the data whether in multiple traces.
+        > Gather input = No
+                 #: Used to recreate index table,required by the seismic data has not been built successfully.
+        > Recreate index = No
+                 #: Only load trace header file option.
+        > Header only = No
+    
+ ===  End of Job Code  === 
+
+-------------- Job Structure --------------
+
+GeoDiskIn_0: [pre-module:  ][post-module: GeoDiskOut_1]
+GeoDiskOut_1: [pre-module: GeoDiskIn_0 ][post-module: ]
+
+-------------------------------------------
+
+***** Enter Module  AM *****
+ Module :      GeoDiskIn
+ Version:      4.00
+ Updated:      Fri Mar 23 10:34:40 CST 2018
+***** Exit Module GeoDiskIn AM *****
+
+ModAM: total memory 0 words
+ModAM: trace sample number =1750 
+ModAM:request sample rate =4000 microseconds
+
+
+***** Enter Module  AM *****
+ Module :      GeoDiskOut
+ Version:      4.00
+ Updated:      Fri Mar 23 10:34:40 CST 2018
+***** Exit Module GeoDiskOut AM *****
+
+ModAM: total memory 0 words
+ModAM: trace sample number =1750 
+ModAM:request sample rate =4000 microseconds
+
+
+==== Job resource report ====
+Total CM: 0 words.
+==== End job resource report ====
+
+
+**********  List Information for All Threads  **********
+
+***** Module Index:  0 *****
+
+***** Module Index:  1 *****
+
+Module Run Time Information
+
+  Module Name              Run Time(AM)             Run Time(PM)
+   GeoDiskIn               0:00:00.492              0:00:07.701        
+   GeoDiskOut              0:00:01.142              0:00:00.480        
+
+Total Run Time(AM): 0:00:01.634
+Total Run Time(PM): 0:00:08.181
+
+Job Information Table
+  ------------------------------------------------------------------------------------------
+ | Mod Index |     Module Name      |  Loop Count  |  CPU Time(secs)  |     Run Time        |
+  ------------------------------------------------------------------------------------------
+ |     0     |   GeoDiskIn          |   4608       |   0.64           |   0:00:08.193       |
+  ------------------------------------------------------------------------------------------
+ |     1     |   GeoDiskOut         |   4608       |   0.66           |   0:00:01.622       |
+  ------------------------------------------------------------------------------------------
+ |    Total CPU Time of All Modules(secs)     |            1.30                             |
+  ------------------------------------------------------------------------------------------
+ |    Total CPU Time of Whole Job(secs)       |            2.30                             |
+  ------------------------------------------------------------------------------------------
+ |    Total Run Time of All Modules           |            0:00:09.815                      |
+  ------------------------------------------------------------------------------------------
+ |    Total Run Time of Whole Job             |            0:00:15.000                      |
+  ------------------------------------------------------------------------------------------
+
+Job Start Date : 2026-07-15 10:10:00
+Job End   Date : 2026-07-15 10:10:05
+
+..........  Job Failed (exit code 1) ..........
+ERROR: GeoDiskIn module failed: input file not found
+Error : seismic path not found: /hw6p/data/geodata/data/BGPCUP2026/survey2/Seismics/02-STAPPLY-FIELD

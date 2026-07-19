@@ -9,56 +9,98 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/dashboard/bff/internal/logpath"
 )
 
-// LogService reads job log files from the filesystem.
+// 默认分页参数与扫描上限
+const (
+	defaultPageSize = 200
+	maxPageSize     = 2000
+	// maxScanLines 限制单次扫描的最大行数，防止 GB 级文件 OOM。
+	// 1 百万行通常已覆盖实际过滤需求；超过则置 truncated=true。
+	maxScanLines = 1_000_000
+)
+
+// LogService reads job log files from the filesystem with pagination support.
+// 日志文件为原始文本内容，不做级别分类。list 文件支持段落快速定位。
 type LogService struct {
-	resolver   *logpath.Resolver
-	maxLines   int
+	resolver  *logpath.Resolver
+	maxLines  int
+	cache     *logCache
+	maxScan   int
+}
+
+type logCache struct {
+	mu    sync.RWMutex
+	items map[string]logCacheEntry
+}
+
+type logCacheEntry struct {
+	signature string
+	lines     int
+	sections  []LogSection // 仅 list 类型有值
 }
 
 func NewLogService(resolver *logpath.Resolver, maxLines int) *LogService {
 	if maxLines <= 0 {
 		maxLines = 5000
 	}
-	return &LogService{resolver: resolver, maxLines: maxLines}
+	return &LogService{
+		resolver: resolver,
+		maxLines: maxLines,
+		maxScan:  maxScanLines,
+		cache:    &logCache{items: make(map[string]logCacheEntry)},
+	}
 }
 
-// LogLevel constants.
-const (
-	LevelAll   = "all"
-	LevelInfo  = "info"
-	LevelWarn  = "warn"
-	LevelError = "error"
-)
-
-// LogLine is one classified log line.
+// LogLine 是日志的原始文本行。
 type LogLine struct {
-	Level string `json:"level"`
-	Ts    string `json:"ts"`
-	Msg   string `json:"msg"`
+	LineNo int    `json:"lineNo"` // 全文行号（从 1 开始，跨文件连续编号）
+	Text   string `json:"text"`   // 原始行内容
 }
 
-// LogResult is the response of the log read endpoint.
+// LogSection 是 list 文件中识别到的段落标题，用于快速跳转。
+type LogSection struct {
+	Name   string `json:"name"`
+	LineNo int    `json:"lineNo"` // 段落起始行号（1-based）
+}
+
+// LogResult 是分页日志响应。
 type LogResult struct {
-	JobName   string    `json:"jobName"`
-	Type      string    `json:"type"`
-	Path      string    `json:"path"`
-	Lines     []LogLine `json:"lines"`
-	Truncated bool      `json:"truncated"`
+	JobName   string       `json:"jobName"`
+	Type      string       `json:"type"` // list | log
+	Path      string       `json:"path"`
+	Page      int          `json:"page"`
+	PageSize  int          `json:"pageSize"`
+	Total     int          `json:"total"`     // 总行数；-1 表示未知
+	Lines     []LogLine    `json:"lines"`
+	Truncated bool         `json:"truncated"` // 是否因超过 maxScanLines 而截断
+	Files     []string     `json:"files"`
+	Filtered  bool         `json:"filtered"`  // 是否启用了 keyword 过滤
+	Cached    bool         `json:"cached"`    // Total/Sections 是否来自缓存
+	Sections  []LogSection `json:"sections"`  // list 文件的段落列表；log 类型为空
 }
 
-// Read reads a job's log file (or directory) for the given type.
-func (s *LogService) Read(ctx context.Context, jobName, project, survey, logType, level, keyword string) (*LogResult, error) {
+// Read 读取作业日志（分页）。
+//   - 无 keyword：扫描到 offset+pageSize 行即停，Total/Sections 优先取缓存。
+//   - 有 keyword：扫描整个文件收集匹配行（限 maxScanLines 行），分页返回。
+//   - logType=list 时，附带返回段落列表（缓存命中或扫描全文后填充）。
+func (s *LogService) Read(ctx context.Context, jobName, project, survey, logType, keyword string, page, pageSize int) (*LogResult, error) {
 	path, err := s.resolver.LogPath(project, survey, logType)
 	if err != nil {
 		return nil, err
 	}
-	level = strings.ToLower(level)
-	if level == "" {
-		level = LevelAll
+	keyword = strings.TrimSpace(keyword)
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = defaultPageSize
+	}
+	if pageSize > maxPageSize {
+		pageSize = maxPageSize
 	}
 
 	files, err := logFiles(path)
@@ -66,8 +108,44 @@ func (s *LogService) Read(ctx context.Context, jobName, project, survey, logType
 		return nil, err
 	}
 
-	out := &LogResult{JobName: jobName, Type: logType, Path: path, Lines: []LogLine{}}
-	count := 0
+	isList := strings.EqualFold(logType, "list")
+	out := &LogResult{
+		JobName:  jobName,
+		Type:     logType,
+		Path:     path,
+		Page:     page,
+		PageSize: pageSize,
+		Lines:    []LogLine{},
+		Files:    files,
+		Filtered: keyword != "",
+		Total:    -1,
+		Sections: nil,
+	}
+
+	if keyword != "" {
+		return s.readFiltered(ctx, out, files, isList, keyword, page, pageSize)
+	}
+	return s.readRaw(ctx, out, files, isList, page, pageSize)
+}
+
+// readRaw 无过滤分页：
+//   - 缓存命中（基于文件 mtime/size 签名）：只扫描到 offset+pageSize 即停，性能好。
+//   - 缓存未命中：扫描整个文件，统计 total、检测段落（list），并填充缓存。
+func (s *LogService) readRaw(ctx context.Context, out *LogResult, files []string, isList bool, page, pageSize int) (*LogResult, error) {
+	if total, sections, hit := s.getCache(files); hit {
+		out.Total = total
+		out.Cached = true
+		if isList {
+			out.Sections = sections
+		}
+	}
+
+	offset := (page - 1) * pageSize
+	lineNo := 0
+	collected := 0
+	scannedToEnd := true
+	var detectedSections []LogSection
+
 	for _, f := range files {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -76,30 +154,164 @@ func (s *LogService) Read(ctx context.Context, jobName, project, survey, logType
 		if err != nil {
 			continue
 		}
-		scanner := bufio.NewScanner(fh)
-		// Allow long lines.
-		buf := make([]byte, 0, 1024*1024)
-		scanner.Buffer(buf, 1024*1024)
+		scanner := newBigScanner(fh)
+		// 用于识别 "----/ModuleName/----" 三行模块段落
+		var prevPrevText, prevText string
+		var prevPrevNo, prevNo int
 		for scanner.Scan() {
-			line := scanner.Text()
-			lvl, ts, msg := classify(line)
-			if !matchLevel(lvl, level) {
-				continue
-			}
-			if keyword != "" && !strings.Contains(strings.ToLower(msg), strings.ToLower(keyword)) {
-				continue
-			}
-			out.Lines = append(out.Lines, LogLine{Level: lvl, Ts: ts, Msg: msg})
-			count++
-			if count >= s.maxLines {
+			lineNo++
+			if lineNo > s.maxScan {
 				out.Truncated = true
-				fh.Close()
-				return out, nil
+				scannedToEnd = false
+				break
+			}
+			line := scanner.Text()
+			// list 类型：检测段落标题（仅缓存未命中时需要）
+			if isList && !out.Cached {
+				if name, ok := detectSection(line); ok {
+					detectedSections = append(detectedSections, LogSection{Name: name, LineNo: lineNo})
+				} else if name, hitNo, ok := detectModuleSection(prevPrevText, prevText, line, prevPrevNo, prevNo); ok {
+					detectedSections = append(detectedSections, LogSection{Name: "Module: " + name, LineNo: hitNo})
+				}
+			}
+			prevPrevText = prevText
+			prevPrevNo = prevNo
+			prevText = line
+			prevNo = lineNo
+			// 已收集够本页且总行数已知 → 停止扫描
+			if collected >= pageSize && out.Total >= 0 {
+				scannedToEnd = false
+				break
+			}
+			// 当前页范围内 → 收集
+			if lineNo > offset && collected < pageSize {
+				out.Lines = append(out.Lines, LogLine{
+					LineNo: lineNo,
+					Text:   line,
+				})
+				collected++
 			}
 		}
 		fh.Close()
+		if out.Truncated || !scannedToEnd {
+			break
+		}
+	}
+
+	// 扫描到末尾 → 得到准确 total/sections，写入缓存
+	if scannedToEnd {
+		out.Total = lineNo
+		if isList && !out.Cached {
+			out.Sections = detectedSections
+			s.setCache(files, lineNo, detectedSections)
+		} else if !out.Cached {
+			s.setCache(files, lineNo, nil)
+		}
+		out.Cached = false
 	}
 	return out, nil
+}
+
+// readFiltered 有过滤分页：扫描整个文件收集匹配行，分页返回。
+// 注意：过滤模式下段落信息仍会返回（来自缓存或扫描期间检测），便于用户跳转。
+func (s *LogService) readFiltered(ctx context.Context, out *LogResult, files []string, isList bool, keyword string, page, pageSize int) (*LogResult, error) {
+	// 先取段落缓存（若有）
+	if isList {
+		if _, sections, hit := s.getCache(files); hit {
+			out.Sections = sections
+			out.Cached = true
+		}
+	}
+
+	kwLow := strings.ToLower(keyword)
+	matched := make([]LogLine, 0, page*pageSize)
+	lineNo := 0
+	var detectedSections []LogSection
+
+	for _, f := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		fh, err := os.Open(f)
+		if err != nil {
+			continue
+		}
+		scanner := newBigScanner(fh)
+		for scanner.Scan() {
+			lineNo++
+			if lineNo > s.maxScan {
+				out.Truncated = true
+				fh.Close()
+				goto done
+			}
+			line := scanner.Text()
+			if isList && (out.Sections == nil) {
+				if name, ok := detectSection(line); ok {
+					detectedSections = append(detectedSections, LogSection{Name: name, LineNo: lineNo})
+				}
+			}
+			if !strings.Contains(strings.ToLower(line), kwLow) {
+				continue
+			}
+			matched = append(matched, LogLine{
+				LineNo: lineNo,
+				Text:   line,
+			})
+		}
+		fh.Close()
+	}
+done:
+	out.Total = len(matched)
+	if isList && out.Sections == nil {
+		out.Sections = detectedSections
+	}
+	offset := (page - 1) * pageSize
+	if offset >= len(matched) {
+		out.Lines = []LogLine{}
+		return out, nil
+	}
+	end := offset + pageSize
+	if end > len(matched) {
+		end = len(matched)
+	}
+	out.Lines = matched[offset:end]
+	return out, nil
+}
+
+// getCache 读取缓存的总行数与段落列表。hit=true 表示缓存命中。
+func (s *LogService) getCache(files []string) (int, []LogSection, bool) {
+	sig := filesSignature(files)
+	key := filesKey(files)
+	s.cache.mu.RLock()
+	defer s.cache.mu.RUnlock()
+	if e, ok := s.cache.items[key]; ok && e.signature == sig {
+		return e.lines, e.sections, true
+	}
+	return -1, nil, false
+}
+
+func (s *LogService) setCache(files []string, lines int, sections []LogSection) {
+	sig := filesSignature(files)
+	key := filesKey(files)
+	s.cache.mu.Lock()
+	s.cache.items[key] = logCacheEntry{signature: sig, lines: lines, sections: sections}
+	s.cache.mu.Unlock()
+}
+
+func filesKey(files []string) string {
+	return strings.Join(files, "|")
+}
+
+func filesSignature(files []string) string {
+	var b strings.Builder
+	for _, f := range files {
+		info, err := os.Stat(f)
+		if err != nil {
+			continue
+		}
+		fmt.Fprintf(&b, "%s|%d|%d|", f, info.ModTime().UnixNano(), info.Size())
+	}
+	return b.String()
 }
 
 // logFiles returns the list of files to read for a path. If path is a file,
@@ -127,55 +339,103 @@ func logFiles(path string) ([]string, error) {
 	return files, nil
 }
 
-// classify detects level, timestamp and message from a raw log line.
+func newBigScanner(fh *os.File) *bufio.Scanner {
+	scanner := bufio.NewScanner(fh)
+	// Allow long lines (up to 1 MiB).
+	buf := make([]byte, 0, 1024*1024)
+	scanner.Buffer(buf, 1024*1024)
+	return scanner
+}
+
+// --- list 文件段落检测 ---
+//
+// 段落标题识别规则（基于示例 zlm-test-web1.job.5567.*.list）：
+//  1. 形如 "===  Start of Job Code  ===" 的等号包裹行
+//  2. 形如 "***** Enter Module  AM *****" 的星号包裹行
+//  3. 形如 "-------------- Job Structure --------------" 的减号包裹行
+//  4. 形如 "==== Job resource report ====" 的混合等号行
+//  5. 形如 "**********  List Information for All Threads  **********" 的混合星号行
+//  6. 关键词行：Module Run Time Information / Job Information Table /
+//     Job Start Date / Job End Date / Job Done Successful / NGP V
+//  7. 模块段落：连续三行 - "------" / "ModuleName" / "------"
 var (
-	tsRe   = regexp.MustCompile(`\b(\d{4}[-/]\d{2}[-/]\d{2}[ T]\d{2}:\d{2}:\d{2}([.,]\d+)?)`)
-	lvlRe  = regexp.MustCompile(`(?i)\b(INFO|WARN(?:ING)?|ERROR(?:S)?|DEBUG|FATAL)\b`)
+	reEquals = regexp.MustCompile(`^={2,}\s*(.+?)\s*={2,}$`)
+	reStars  = regexp.MustCompile(`^\*{2,}\s*(.+?)\s*\*{2,}$`)
+	reDashes = regexp.MustCompile(`^-{2,}\s*(.+?)\s*-{2,}$`)
+	reDashOnly = regexp.MustCompile(`^-{2,}$`)
 )
 
-func classify(line string) (level, ts, msg string) {
-	msg = line
-	if m := tsRe.FindStringSubmatch(line); len(m) > 1 {
-		ts = m[1]
+var sectionKeywords = []string{
+	"Module Run Time Information",
+	"Job Information Table",
+	"Job Start Date",
+	"Job End Date",
+	"Job Done Successful",
+	"Job Done",
+	"NGP V",
+}
+
+// detectSection 判断一行是否为段落标题，返回标题名与是否命中。
+// 排除纯装饰行（如 "------...------" 全是同一字符），只保留真正含内容的标题。
+func detectSection(line string) (string, bool) {
+	s := strings.TrimSpace(line)
+	if s == "" {
+		return "", false
 	}
-	if m := lvlRe.FindStringSubmatch(line); len(m) > 1 {
-		level = normalizeLevel(m[1])
-	}
-	if level == "" {
-		// Fallback: keyword sniff.
-		low := strings.ToLower(line)
-		switch {
-		case strings.Contains(low, "error") || strings.Contains(low, "fail"):
-			level = LevelError
-		case strings.Contains(low, "warn"):
-			level = LevelWarn
-		default:
-			level = LevelInfo
+	if m := reEquals.FindStringSubmatch(s); len(m) > 1 {
+		name := strings.TrimSpace(m[1])
+		if isMeaningfulName(name, "=") {
+			return name, true
 		}
 	}
-	return level, ts, msg
+	if m := reStars.FindStringSubmatch(s); len(m) > 1 {
+		name := strings.TrimSpace(m[1])
+		if isMeaningfulName(name, "*") {
+			return name, true
+		}
+	}
+	if m := reDashes.FindStringSubmatch(s); len(m) > 1 {
+		name := strings.TrimSpace(m[1])
+		if isMeaningfulName(name, "-") {
+			return name, true
+		}
+	}
+	for _, k := range sectionKeywords {
+		if strings.Contains(s, k) {
+			return s, true
+		}
+	}
+	return "", false
 }
 
-func normalizeLevel(s string) string {
-	switch strings.ToUpper(s) {
-	case "INFO":
-		return LevelInfo
-	case "WARN", "WARNING":
-		return LevelWarn
-	case "ERROR", "ERRORS":
-		return LevelError
-	case "FATAL":
-		return LevelError
-	case "DEBUG":
-		return LevelInfo
-	default:
-		return LevelInfo
+// isMeaningfulName 判断捕获到的标题是否包含至少一个非装饰字符。
+// 避免把 "-------------------------------------------" 这种纯装饰行误识别为段落。
+func isMeaningfulName(name, decoChar string) bool {
+	if name == "" {
+		return false
 	}
+	// 去掉所有装饰字符后还有内容才算
+	trimmed := strings.Trim(name, decoChar)
+	trimmed = strings.TrimSpace(trimmed)
+	return trimmed != ""
 }
 
-func matchLevel(lineLevel, filter string) bool {
-	if filter == LevelAll || filter == "" {
-		return true
+// detectModuleSection 用于扫描时跟踪上下文，识别 "----/ModuleName/----" 三行段落。
+// 调用方维护最近两行（prevPrev, prev），传入当前行 cur：
+//   - 若 prevPrev 与 cur 都是纯减号行，且 prev 是单个非空单词 → 命中模块段落
+//   - 返回 name, hitLineNo（命中行号 = prev 行号）
+// 注：此函数为有状态扫描的辅助函数，本实现未启用；保留供未来增强使用。
+func detectModuleSection(prevPrev, prev, cur string, prevPrevNo, prevNo int) (string, int, bool) {
+	if prevPrev == "" || prev == "" || cur == "" {
+		return "", 0, false
 	}
-	return lineLevel == filter
+	if reDashOnly.MatchString(strings.TrimSpace(prevPrev)) &&
+		reDashOnly.MatchString(strings.TrimSpace(cur)) {
+		name := strings.TrimSpace(prev)
+		// 模块名通常为单词（不含空格、冒号、等号）
+		if name != "" && !strings.ContainsAny(name, " :=*-/") {
+			return name, prevNo, true
+		}
+	}
+	return "", 0, false
 }

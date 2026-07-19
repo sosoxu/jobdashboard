@@ -13,10 +13,10 @@ type Analyzer interface {
 
 // AnalyzeResult is the AI / rule analysis response.
 type AnalyzeResult struct {
-	Mode         string           `json:"mode"`
-	Summary      string           `json:"summary"`
-	ModuleErrors []ModuleError    `json:"moduleErrors"`
-	Suggestions  []Suggestion     `json:"suggestions"`
+	Mode         string        `json:"mode"`
+	Summary      string        `json:"summary"`
+	ModuleErrors []ModuleError `json:"moduleErrors"`
+	Suggestions  []Suggestion  `json:"suggestions"`
 }
 
 type ModuleError struct {
@@ -31,27 +31,30 @@ type Suggestion struct {
 }
 
 // RuleAnalyzer is the placeholder analyzer using keyword/error-code heuristics.
+// 日志为原始文本，无结构化级别字段；通过关键词识别告警/错误行。
 type RuleAnalyzer struct{}
 
 func NewRuleAnalyzer() *RuleAnalyzer { return &RuleAnalyzer{} }
 
 func (a *RuleAnalyzer) Analyze(_ context.Context, log *LogResult) (*AnalyzeResult, error) {
-	info, warn, err := 0, 0, 0
+	info, warn, errc := 0, 0, 0
 	modules := make(map[string]int)
 	for _, l := range log.Lines {
-		switch l.Level {
-		case LevelInfo:
-			info++
-		case LevelWarn:
+		switch classifyLine(l.Text) {
+		case "error":
+			errc++
+			modules[detectModule(l.Text)]++
+		case "warn":
 			warn++
-		case LevelError:
-			err++
-			modules[detectModule(l.Msg)]++
+		default:
+			info++
 		}
 	}
 	res := &AnalyzeResult{
-		Mode:    "rule",
-		Summary: summaryLine(len(log.Lines), info, warn, err),
+		Mode:         "rule",
+		Summary:      summaryLine(len(log.Lines), info, warn, errc),
+		ModuleErrors: []ModuleError{},
+		Suggestions:  []Suggestion{},
 	}
 	for m, c := range modules {
 		res.ModuleErrors = append(res.ModuleErrors, ModuleError{Module: m, Count: c})
@@ -59,6 +62,20 @@ func (a *RuleAnalyzer) Analyze(_ context.Context, log *LogResult) (*AnalyzeResul
 	sort.Slice(res.ModuleErrors, func(i, j int) bool { return res.ModuleErrors[i].Count > res.ModuleErrors[j].Count })
 	res.Suggestions = ruleSuggestions(modules)
 	return res, nil
+}
+
+// classifyLine 通过关键词对原始文本行做粗分级别（error/warn/info）。
+// 仅用于 AI 分析视图的统计展示，不影响日志查看本身。
+func classifyLine(text string) string {
+	low := strings.ToLower(text)
+	// 排除"successful/done"等正向词干扰
+	if strings.Contains(low, "error") || strings.Contains(low, "fail") || strings.Contains(low, "fatal") {
+		return "error"
+	}
+	if strings.Contains(low, "warn") {
+		return "warn"
+	}
+	return "info"
 }
 
 func summaryLine(total, info, warn, errc int) string {
@@ -96,7 +113,7 @@ func detectModule(msg string) string {
 }
 
 func ruleSuggestions(modules map[string]int) []Suggestion {
-	var out []Suggestion
+	out := []Suggestion{}
 	if modules["IO"] > 0 {
 		out = append(out, Suggestion{Code: "E_IO_001", Desc: "IO 模块出现读取/写入失败，建议检查磁盘空间、文件权限与挂载状态", Severity: "high"})
 	}

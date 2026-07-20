@@ -17,6 +17,16 @@ log:
   ngpEnv: "NGP"
   projectsConfRel: "configs/ndp/projects.conf"
   maxLogLines: 5000
+  # 日志文件路径；为空则只输出到 stdout
+  file: "./logs/bff.log"
+  # 日志级别：debug/info/warn/error
+  level: "info"
+  # 单个日志文件最大 MB，超过则滚动切分
+  maxSizeMB: 100
+  # 保留的旧日志文件数量
+  maxBackups: 7
+  # 旧日志文件最大保留天数
+  maxAgeDays: 30
 
 ai:
   enabled: false

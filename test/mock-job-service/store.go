@@ -275,7 +275,9 @@ type JSFStats struct {
 	OtherCount int `json:"othercount"`
 }
 
-// CurrentJSFInfo 计算当前聚合统计
+// CurrentJSFInfo 计算当前聚合统计。
+// 模拟生产上游行为：按 jobStatus 原始值分组，不感知 exitCode。
+// jsFinished + exitCode!=0 的作业仍会被计入 Finish（由 BFF 端做修正）。
 func (s *Store) CurrentJSFInfo() JSFStats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

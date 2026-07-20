@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/dashboard/bff/internal/cache"
 	"github.com/dashboard/bff/internal/model"
 	"github.com/dashboard/bff/internal/store"
 	"github.com/dashboard/bff/internal/upstream"
@@ -15,10 +16,29 @@ type StatsService struct {
 	client    *upstream.Client
 	statsRepo *store.StatsRepo
 	userRepo  *store.UserRepo
+	jobCache  *cache.JobCache
 }
 
-func NewStatsService(client *upstream.Client, statsRepo *store.StatsRepo, userRepo *store.UserRepo) *StatsService {
-	return &StatsService{client: client, statsRepo: statsRepo, userRepo: userRepo}
+func NewStatsService(client *upstream.Client, statsRepo *store.StatsRepo, userRepo *store.UserRepo, jobCache *cache.JobCache) *StatsService {
+	return &StatsService{client: client, statsRepo: statsRepo, userRepo: userRepo, jobCache: jobCache}
+}
+
+// correctByExitCode 按 exitCode 修正 snapshot：jsFinished + exitCode!=0 的作业
+// 从 Finish 移到 Failed。jobCache 为空或不可用时原样返回。
+func (s *StatsService) correctByExitCode(snap *model.StatsSnapshot) {
+	if s.jobCache == nil || s.jobCache.Empty() {
+		return
+	}
+	jobs, _ := s.jobCache.Snapshot()
+	bad := model.CountBadFinish(jobs)
+	if bad <= 0 {
+		return
+	}
+	snap.Finish -= bad
+	if snap.Finish < 0 {
+		snap.Finish = 0
+	}
+	snap.Failed += bad
 }
 
 // GroupStat is one status group with current value and change vs previous.
@@ -45,6 +65,8 @@ func (s *StatsService) Stats(ctx context.Context, fresh bool) (*StatsResult, err
 	if fresh {
 		if snap, err := s.client.GetCurrentJSFInfo(ctx); err == nil {
 			cur = *snap
+			// 上游聚合不感知 exitCode，用全量缓存修正 Finish/Failed。
+			s.correctByExitCode(&cur)
 		} else {
 			// 上游失败：降级到 DB 最新快照；DB 也无数据则返回空统计。
 			degraded = true
@@ -63,6 +85,7 @@ func (s *StatsService) Stats(ctx context.Context, fresh bool) (*StatsResult, err
 			// DB 无快照：尝试上游一次；上游也失败则返回空统计 + 降级。
 			if snap, e2 := s.client.GetCurrentJSFInfo(ctx); e2 == nil {
 				cur = *snap
+				s.correctByExitCode(&cur)
 			} else {
 				degraded = true
 				cur = model.StatsSnapshot{Ts: time.Now().Unix()}

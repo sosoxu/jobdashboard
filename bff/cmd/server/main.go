@@ -66,7 +66,7 @@ func main() {
 	jobCache := cache.NewJobCache()
 
 	// Services.
-	statsSvc := service.NewStatsService(client, statsRepo, userRepo)
+	statsSvc := service.NewStatsService(client, statsRepo, userRepo, jobCache)
 	jobSvc := service.NewJobService(client, jobCache, cfg.Sampler.JobPageSize, cfg.Sampler.JobPageSleepMs, cfg.Sampler.JobIntervalSec)
 	logger := slog.Default()
 	resolver := logpath.New(cfg.Log.NgpEnv, cfg.Log.ProjectsConfRel, logger)
@@ -77,16 +77,17 @@ func main() {
 	// Sampler scheduler.
 	sched := sampler.New(logger)
 	if cfg.Sampler.Enabled {
-		jsf := sampler.NewJSFSampler(client, statsRepo, logger)
+		jsf := sampler.NewJSFSampler(client, statsRepo, jobCache, logger)
 		job := sampler.NewJobSampler(client, userRepo, jobCache, cfg.Sampler.JobPageSize, cfg.Sampler.JobPageSleepMs, logger)
 		cleanup := sampler.NewCleanup(statsRepo, userRepo, cfg.Sampler.RetainDays, logger)
 
 		// Bootstrap one immediate sample so the dashboard isn't empty on boot.
+		// 顺序：先 job（填充 cache），再 jsf（依赖 cache 做 exitCode 修正）。
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			jsf.Sample(ctx)
 			job.Sample(ctx)
+			jsf.Sample(ctx)
 		}()
 
 		sched.Register("jsf", time.Duration(cfg.Sampler.JsfIntervalSec)*time.Second, jsf.Sample)

@@ -30,6 +30,20 @@ func EffectiveStatusCode(code int, exitCode uint) int {
 	return code
 }
 
+// CountBadFinish 返回 jobs 中"jobStatus=jsFinished 但 exitCode!=0"的作业数量。
+// 这类作业在上游聚合统计里被算作 finish，但按业务规则应计入 failed。
+// 调用方据此修正 StatsSnapshot：Finish -= bad, Failed += bad。
+func CountBadFinish(jobs []JobInfo) int {
+	var n int
+	for i := range jobs {
+		j := &jobs[i]
+		if j.StatusCode() == JsFinished && j.ExitCode != 0 {
+			n++
+		}
+	}
+	return n
+}
+
 // StateLabel returns a Chinese label for a status code.
 func StateLabel(code int) string {
 	switch code {

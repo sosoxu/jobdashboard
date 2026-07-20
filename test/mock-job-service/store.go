@@ -178,7 +178,14 @@ func (s *Store) newJobLocked(status int, commitTs int64) *Job {
 		j.EndTime = j.StartTime + dur
 		j.ExecTime = uint(dur)
 		j.JobProcess = 100
-		j.ExitCode = 0
+		// 约 20% 概率产出 jsFinished + exitCode!=0 的"执行失败"样本，
+		// 用于验证 BFF 端将其视为 jsFailed 的逻辑。
+		if s.rng.Intn(100) < 20 {
+			j.ExitCode = 1
+			j.ReportMessage = "execution failed: non-zero exit code"
+		} else {
+			j.ExitCode = 0
+		}
 	case jsFailed:
 		j.ScheduleTime = uint64(commitTs) + uint64(s.rng.Intn(60))
 		j.StartTime = j.ScheduleTime + uint64(s.rng.Intn(10))
@@ -220,9 +227,16 @@ func (s *Store) Evolve() {
 					j.EndTime = uint64(now)
 					j.ReportMessage = "execution failed: timeout"
 				} else {
+					// 即使达到 100% 也可能以非零退出码结束（约 20%），
+					// 此时上游 jobStatus 仍为 jsFinished，但 exitCode!=0。
 					j.JobStatus = fmt.Sprintf("%d", jsFinished)
-					j.ExitCode = 0
 					j.EndTime = uint64(now)
+					if s.rng.Intn(100) < 20 {
+						j.ExitCode = 1
+						j.ReportMessage = "execution failed: non-zero exit code"
+					} else {
+						j.ExitCode = 0
+					}
 				}
 			}
 		case jsQueue:

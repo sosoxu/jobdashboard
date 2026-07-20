@@ -125,7 +125,11 @@
                 </el-descriptions-item>
                 <el-descriptions-item label="工区">{{ row.survey }}</el-descriptions-item>
                 <el-descriptions-item label="运行耗时">{{ fmtDuration(row.execTime) }}</el-descriptions-item>
-                <el-descriptions-item label="摘要" :span="3">{{ row.summary }}</el-descriptions-item>
+                <el-descriptions-item label="退出码">
+                  <span v-if="row.exitCode === 0" class="muted">0</span>
+                  <el-tag v-else type="danger" size="small">{{ row.exitCode }}</el-tag>
+                </el-descriptions-item>
+                <el-descriptions-item label="摘要" :span="2">{{ row.summary }}</el-descriptions-item>
               </el-descriptions>
             </div>
           </template>

@@ -19,6 +19,17 @@ const (
 	JsCanceled      // 12
 )
 
+// EffectiveStatusCode 推导作业的"有效状态"。
+// 业务规则：jobStatus=jsFinished(10) 且 exitCode==0 才算真正完成；
+// 否则 jobStatus=jsFinished 且 exitCode!=0 视为失败，统一映射为 jsFailed(11)。
+// 其他状态原样返回。
+func EffectiveStatusCode(code int, exitCode uint) int {
+	if code == JsFinished && exitCode != 0 {
+		return JsFailed
+	}
+	return code
+}
+
 // StateLabel returns a Chinese label for a status code.
 func StateLabel(code int) string {
 	switch code {

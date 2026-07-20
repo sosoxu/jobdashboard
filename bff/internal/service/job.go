@@ -126,7 +126,8 @@ func (s *JobService) List(ctx context.Context, q JobListQuery) (*JobListResult, 
 	filtered := make([]model.JobInfo, 0, len(jobs))
 	for i := range jobs {
 		j := &jobs[i]
-		if len(statusSet) > 0 && !statusSet[j.StatusCode()] {
+		// 过滤按"有效状态"匹配：jsFinished + exitCode!=0 视为 jsFailed。
+		if len(statusSet) > 0 && !statusSet[model.EffectiveStatusCode(j.StatusCode(), j.ExitCode)] {
 			continue
 		}
 		if len(userSet) > 0 && !userSet[strings.ToLower(j.UserName)] {
@@ -172,7 +173,9 @@ func (s *JobService) List(ctx context.Context, q JobListQuery) (*JobListResult, 
 	items := make([]JobListItem, 0, len(pageJobs))
 	for i := range pageJobs {
 		j := &pageJobs[i]
-		code := j.StatusCode()
+		// 使用有效状态：jsFinished + exitCode!=0 视为 jsFailed，避免把
+		// 执行失败的作业误显示为"已完成"。
+		code := model.EffectiveStatusCode(j.StatusCode(), j.ExitCode)
 		items = append(items, JobListItem{
 			JobName:        j.JobName,
 			JobDesc:        j.JobDesc,

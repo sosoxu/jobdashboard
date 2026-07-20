@@ -26,6 +26,9 @@ export interface TrendPoint {
   ts: number
   finish: number
   active: number
+  queue: number
+  failed: number
+  canceled: number
 }
 
 export interface TrendResult {

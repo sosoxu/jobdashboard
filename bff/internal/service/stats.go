@@ -109,9 +109,12 @@ func buildGroups(cur, prev model.StatsSnapshot) []GroupStat {
 
 // TrendPoint is one point in the trend series.
 type TrendPoint struct {
-	Ts     int64 `json:"ts"`
-	Finish int   `json:"finish"`
-	Active int   `json:"active"`
+	Ts      int64 `json:"ts"`
+	Finish  int   `json:"finish"`
+	Active  int   `json:"active"`
+	Queue   int   `json:"queue"`
+	Failed  int   `json:"failed"`
+	Canceled int  `json:"canceled"`
 }
 
 // TrendResult is the response of the trend endpoint.
@@ -174,7 +177,14 @@ func aggregate(snaps []model.StatsSnapshot, r string) []TrendPoint {
 	out := make([]TrendPoint, 0, len(keys))
 	for _, k := range keys {
 		s := lastInBucket[k]
-		out = append(out, TrendPoint{Ts: s.Ts, Finish: s.Finish, Active: s.Active})
+		out = append(out, TrendPoint{
+			Ts:       s.Ts,
+			Finish:   s.Finish,
+			Active:   s.Active,
+			Queue:    s.Queue,
+			Failed:   s.Failed,
+			Canceled: s.Canceled,
+		})
 	}
 	return out
 }

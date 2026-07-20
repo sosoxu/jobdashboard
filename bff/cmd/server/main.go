@@ -16,6 +16,7 @@ import (
 	"github.com/dashboard/bff/internal/cache"
 	"github.com/dashboard/bff/internal/config"
 	"github.com/dashboard/bff/internal/handler"
+	"github.com/dashboard/bff/internal/logging"
 	"github.com/dashboard/bff/internal/logpath"
 	"github.com/dashboard/bff/internal/sampler"
 	"github.com/dashboard/bff/internal/service"
@@ -24,8 +25,9 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	slog.SetDefault(logger)
+	// 先用 stdout 启动一个临时 logger，用于配置加载阶段的错误输出。
+	bootLogger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(bootLogger)
 
 	cfgPath := ""
 	if len(os.Args) > 1 {
@@ -33,14 +35,22 @@ func main() {
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		logger.Error("load config failed", "err", err)
+		bootLogger.Error("load config failed", "err", err)
 		os.Exit(1)
 	}
+
+	// 根据配置初始化日志：同时输出到 stdout 和文件（若配置了 file）。
+	logCleanup, err := logging.Setup(&cfg.Log)
+	if err != nil {
+		bootLogger.Error("init logging failed", "err", err)
+		os.Exit(1)
+	}
+	defer logCleanup()
 
 	// Persistence.
 	db, err := store.Open(cfg.Storage.SqlitePath)
 	if err != nil {
-		logger.Error("open db failed", "err", err)
+		slog.Error("open db failed", "err", err)
 		os.Exit(1)
 	}
 	defer db.Close()
@@ -58,6 +68,7 @@ func main() {
 	// Services.
 	statsSvc := service.NewStatsService(client, statsRepo, userRepo)
 	jobSvc := service.NewJobService(client, jobCache, cfg.Sampler.JobPageSize, cfg.Sampler.JobPageSleepMs, cfg.Sampler.JobIntervalSec)
+	logger := slog.Default()
 	resolver := logpath.New(cfg.Log.NgpEnv, cfg.Log.ProjectsConfRel, logger)
 	logSvc := service.NewLogService(resolver, cfg.Log.MaxLogLines)
 	analyzer := service.NewRuleAnalyzer()

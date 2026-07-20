@@ -7,11 +7,11 @@ import (
 	"net/http"
 )
 
-// callRequest 镜像上游统一入口的请求体
+// callRequest 镜像上游统一入口的请求体。
+// 上游统一使用 "params"（复数）作为参数字段名，所有方法一致。
 type callRequest struct {
 	Method string          `json:"method"`
-	Param  json.RawMessage `json:"param"`  // GetCurrentJSFInfo 用单数
-	Params json.RawMessage `json:"params"` // GetJob/Delete/Rerunmulti 用复数
+	Params json.RawMessage `json:"params"`
 }
 
 // callResponse 镜像上游统一响应信封

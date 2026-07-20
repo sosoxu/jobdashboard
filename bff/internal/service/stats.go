@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"sort"
 	"time"
 
@@ -48,29 +46,27 @@ func (s *StatsService) Stats(ctx context.Context, fresh bool) (*StatsResult, err
 		if snap, err := s.client.GetCurrentJSFInfo(ctx); err == nil {
 			cur = *snap
 		} else {
-			// fall back to latest snapshot
+			// 上游失败：降级到 DB 最新快照；DB 也无数据则返回空统计。
 			degraded = true
 			latest, lerr := s.statsRepo.Latest()
-			if lerr != nil {
-				return nil, err
+			if lerr == nil {
+				cur = latest
+			} else {
+				cur = model.StatsSnapshot{Ts: time.Now().Unix()}
 			}
-			cur = latest
 		}
 	} else {
 		latest, err := s.statsRepo.Latest()
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				// No snapshot yet; try upstream once.
-				if snap, e2 := s.client.GetCurrentJSFInfo(ctx); e2 == nil {
-					cur = *snap
-				} else {
-					return nil, e2
-				}
-			} else {
-				return nil, err
-			}
-		} else {
+		if err == nil {
 			cur = latest
+		} else {
+			// DB 无快照：尝试上游一次；上游也失败则返回空统计 + 降级。
+			if snap, e2 := s.client.GetCurrentJSFInfo(ctx); e2 == nil {
+				cur = *snap
+			} else {
+				degraded = true
+				cur = model.StatsSnapshot{Ts: time.Now().Unix()}
+			}
 		}
 	}
 

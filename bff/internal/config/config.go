@@ -38,8 +38,18 @@ type SamplerCfg struct {
 
 type LogCfg struct {
 	NgpEnv           string `yaml:"ngpEnv"`
-	ProjectsConfRel string `yaml:"projectsConfRel"`
+	ProjectsConfRel  string `yaml:"projectsConfRel"`
 	MaxLogLines      int    `yaml:"maxLogLines"`
+	// File 指定日志文件路径；为空则只输出到 stdout。
+	File string `yaml:"file"`
+	// Level 日志级别：debug/info/warn/error，默认 info。
+	Level string `yaml:"level"`
+	// MaxSizeMB 单个日志文件最大 MB，超过则滚动切分，默认 100。
+	MaxSizeMB int `yaml:"maxSizeMB"`
+	// MaxBackups 保留的旧日志文件数量，默认 7。
+	MaxBackups int `yaml:"maxBackups"`
+	// MaxAgeDays 旧日志文件最大保留天数，默认 30。
+	MaxAgeDays int `yaml:"maxAgeDays"`
 }
 
 type AICfg struct {
@@ -115,6 +125,18 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Log.MaxLogLines == 0 {
 		c.Log.MaxLogLines = 5000
+	}
+	if c.Log.Level == "" {
+		c.Log.Level = "info"
+	}
+	if c.Log.MaxSizeMB == 0 {
+		c.Log.MaxSizeMB = 100
+	}
+	if c.Log.MaxBackups == 0 {
+		c.Log.MaxBackups = 7
+	}
+	if c.Log.MaxAgeDays == 0 {
+		c.Log.MaxAgeDays = 30
 	}
 	if c.Storage.SqlitePath == "" {
 		c.Storage.SqlitePath = "./data/dashboard.db"

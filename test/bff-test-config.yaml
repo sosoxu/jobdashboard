@@ -17,6 +17,11 @@ log:
   ngpEnv: "NGP"
   projectsConfRel: "configs/ndp/projects.conf"
   maxLogLines: 5000
+  file: "./logs/bff.log"
+  level: "info"
+  maxSizeMB: 10
+  maxBackups: 5
+  maxAgeDays: 30
 
 ai:
   enabled: false

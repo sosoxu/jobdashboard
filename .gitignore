@@ -2,6 +2,7 @@
 bff/bin/
 bff/data/
 bff/web/dist/
+bff/logs/
 *.db
 *.db-*
 
@@ -19,6 +20,7 @@ frontend/components.d.ts
 # Test artifacts
 /tmp/
 *.png
+logs/
 
 # Compiled binaries
 test/mock-job-service/mock-job-service

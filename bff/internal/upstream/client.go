@@ -45,18 +45,20 @@ type rawResponse struct {
 }
 
 // GetCurrentJSFInfo returns the current aggregate job stats.
-// Note: upstream uses "param" (singular) for this method.
+// 生产环境验证：上游统一使用 "params"（复数）作为参数字段名，
+// 与 GetJob/Delete/Rerunmulti 一致。早期假设 "param"（单数）导致
+// 上游返回 errorCode=1。
 func (c *Client) GetCurrentJSFInfo(ctx context.Context) (*model.StatsSnapshot, error) {
 	body := map[string]any{
 		"method": "GetCurrentJSFInfo",
-		"param":  map[string]any{"type": 2},
+		"params": map[string]any{"type": 2},
 	}
 	var raw rawResponse
 	if err := c.do(ctx, body, &raw); err != nil {
 		return nil, err
 	}
 	if raw.ErrorCode != 0 {
-		return nil, fmt.Errorf("upstream errorCode=%d", raw.ErrorCode)
+		return nil, fmt.Errorf("GetCurrentJSFInfo upstream errorCode=%d (count=%d, result=%s)", raw.ErrorCode, raw.Count, truncateForLog(raw.Result))
 	}
 	// result is an array of one stats object.
 	var stats []struct {
@@ -212,4 +214,14 @@ func (c *Client) do(ctx context.Context, body any, out *rawResponse) error {
 		return fmt.Errorf("decode upstream response: %w", err)
 	}
 	return nil
+}
+
+// truncateForLog 截断原始 JSON 到合理长度，用于错误日志。
+func truncateForLog(raw json.RawMessage) string {
+	const max = 500
+	s := string(raw)
+	if len(s) > max {
+		return s[:max] + "...(truncated)"
+	}
+	return s
 }

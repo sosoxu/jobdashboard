@@ -3,7 +3,7 @@
     <div class="card mb-16">
       <div class="flex-between">
         <div>
-          <el-button text :icon="Back" @click="$router.push('/jobs')">返回</el-button>
+          <el-button text :icon="Back" @click="goBack">返回</el-button>
           <span class="log-title">作业日志：{{ jobDesc || jobName }}</span>
         </div>
         <div class="muted">作业编号 {{ jobName }}</div>
@@ -132,15 +132,26 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Back } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getLogs, analyzeLogs } from '@/api/log'
 import type { LogResult, AnalyzeResult, LogSection } from '@/api/types'
 
 const route = useRoute()
+const router = useRouter()
 const jobName = computed(() => String(route.params.jobName || ''))
 const jobDesc = computed(() => String(route.query.jobDesc || ''))
+
+// 返回：优先 router.back() 回到原 JobList 路由（保留 query，含 onlyMine）；
+// 若历史栈为空（如直接访问日志页 URL），则 fallback 到 /jobs。
+function goBack() {
+  if (window.history.state?.back) {
+    router.back()
+  } else {
+    router.push('/jobs')
+  }
+}
 
 const activeTab = ref<'list' | 'log' | 'ai'>('list')
 const keyword = ref('')

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -37,11 +38,12 @@ const (
 //   - 多个匹配时取 mtime 最新；mtime 相同时取编号最大者
 //   - 使用 filepath.Glob 在内核侧做名字过滤，避免 ReadDir 全量遍历
 type LogService struct {
-	resolver *logpath.Resolver
-	maxLines int
-	cache    *logCache
+	resolver  *logpath.Resolver
+	maxLines  int
+	cache     *logCache
 	pathCache *pathCache
-	maxScan  int
+	maxScan   int
+	logger    *slog.Logger
 }
 
 type logCache struct {
@@ -88,9 +90,12 @@ func (p *pathCache) set(key, file string) {
 	p.items[key] = pathCacheEntry{file: file, checkedAt: time.Now()}
 }
 
-func NewLogService(resolver *logpath.Resolver, maxLines int) *LogService {
+func NewLogService(resolver *logpath.Resolver, maxLines int, logger *slog.Logger) *LogService {
 	if maxLines <= 0 {
 		maxLines = 5000
+	}
+	if logger == nil {
+		logger = slog.Default()
 	}
 	return &LogService{
 		resolver:  resolver,
@@ -98,6 +103,7 @@ func NewLogService(resolver *logpath.Resolver, maxLines int) *LogService {
 		maxScan:   maxScanLines,
 		cache:     &logCache{items: make(map[string]logCacheEntry)},
 		pathCache: newPathCache(),
+		logger:    logger,
 	}
 }
 
@@ -137,8 +143,23 @@ type LogResult struct {
 func (s *LogService) Read(ctx context.Context, jobName, project, survey, logType, keyword string, page, pageSize int) (*LogResult, error) {
 	logDir, err := s.resolver.LogDir(project, survey, logType)
 	if err != nil {
+		s.logger.Error("log.resolve_dir_failed",
+			"jobName", jobName,
+			"project", project,
+			"survey", survey,
+			"logType", logType,
+			"err", err)
 		return nil, err
 	}
+	s.logger.Info("log.read_request",
+		"jobName", jobName,
+		"project", project,
+		"survey", survey,
+		"logType", logType,
+		"logDir", logDir,
+		"keyword", keyword,
+		"page", page,
+		"pageSize", pageSize)
 	keyword = strings.TrimSpace(keyword)
 	if page < 1 {
 		page = 1
@@ -153,6 +174,11 @@ func (s *LogService) Read(ctx context.Context, jobName, project, survey, logType
 	ext := logExt(logType)
 	files, err := s.locateLogFiles(logDir, jobName, ext)
 	if err != nil {
+		s.logger.Error("log.locate_failed",
+			"jobName", jobName,
+			"logDir", logDir,
+			"ext", ext,
+			"err", err)
 		return nil, err
 	}
 
@@ -160,6 +186,17 @@ func (s *LogService) Read(ctx context.Context, jobName, project, survey, logType
 	path := ""
 	if len(files) > 0 {
 		path = files[0]
+		s.logger.Info("log.file_resolved",
+			"jobName", jobName,
+			"logType", logType,
+			"filePath", path,
+			"matchCount", len(files))
+	} else {
+		s.logger.Warn("log.file_not_found",
+			"jobName", jobName,
+			"logType", logType,
+			"logDir", logDir,
+			"globPattern", filepath.Join(logDir, "*."+jobName+"."+ext))
 	}
 	out := &LogResult{
 		JobName:  jobName,
@@ -193,8 +230,17 @@ func (s *LogService) locateLogFiles(logDir, jobName, ext string) ([]string, erro
 	if file, ok := s.pathCache.get(cacheKey); ok && file != "" {
 		// 缓存命中：复用上次的解析结果。若文件已被删除则 fallthrough 重新 glob。
 		if _, err := os.Stat(file); err == nil {
+			s.logger.Info("log.path_cache_hit",
+				"jobName", jobName,
+				"ext", ext,
+				"filePath", file)
 			return []string{file}, nil
 		}
+		s.logger.Info("log.path_cache_stale",
+			"jobName", jobName,
+			"ext", ext,
+			"cachedFilePath", file,
+			"reason", "stat_failed")
 	}
 
 	file, err := findLatestLog(logDir, jobName, ext)
@@ -227,17 +273,33 @@ func findLatestLog(logDir, jobName, ext string) (string, error) {
 		return "", fmt.Errorf("glob 日志文件失败 %s: %w", pattern, err)
 	}
 	if len(matches) == 0 {
+		slog.Info("log.glob_no_match",
+			"pattern", pattern,
+			"logDir", logDir,
+			"jobName", jobName,
+			"ext", ext)
 		return "", nil
 	}
+	slog.Info("log.glob_matched",
+		"pattern", pattern,
+		"matchCount", len(matches))
 	type candidate struct {
 		path  string
 		mtime time.Time
 		seq   int // 四位数编号；解析失败按 -1 处理（落到最后）
 	}
 	cands := make([]candidate, 0, len(matches))
+	skipped := 0
 	for _, m := range matches {
 		info, err := os.Stat(m)
-		if err != nil || info.IsDir() {
+		if err != nil {
+			slog.Warn("log.glob_stat_failed", "file", m, "err", err)
+			skipped++
+			continue
+		}
+		if info.IsDir() {
+			slog.Warn("log.glob_match_is_dir", "file", m)
+			skipped++
 			continue
 		}
 		cands = append(cands, candidate{
@@ -247,6 +309,10 @@ func findLatestLog(logDir, jobName, ext string) (string, error) {
 		})
 	}
 	if len(cands) == 0 {
+		slog.Warn("log.glob_all_skipped",
+			"pattern", pattern,
+			"matchCount", len(matches),
+			"skipped", skipped)
 		return "", nil
 	}
 	sort.Slice(cands, func(i, j int) bool {
@@ -257,6 +323,11 @@ func findLatestLog(logDir, jobName, ext string) (string, error) {
 		// 编号降序
 		return cands[i].seq > cands[j].seq
 	})
+	slog.Info("log.glob_selected",
+		"selected", cands[0].path,
+		"mtime", cands[0].mtime.Format(time.RFC3339Nano),
+		"seq", cands[0].seq,
+		"candidateCount", len(cands))
 	return cands[0].path, nil
 }
 

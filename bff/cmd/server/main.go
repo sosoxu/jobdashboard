@@ -70,7 +70,7 @@ func main() {
 	jobSvc := service.NewJobService(client, jobCache, cfg.Sampler.JobPageSize, cfg.Sampler.JobPageSleepMs, cfg.Sampler.JobIntervalSec)
 	logger := slog.Default()
 	resolver := logpath.New(cfg.Log.NgpEnv, cfg.Log.ProjectsConfRel, logger)
-	logSvc := service.NewLogService(resolver, cfg.Log.MaxLogLines)
+	logSvc := service.NewLogService(resolver, cfg.Log.MaxLogLines, logger)
 	analyzer := service.NewRuleAnalyzer()
 	authSvc := service.NewAuthService(authRepo, cfg.Auth.JWTSecret, cfg.Auth.TokenTTLHour)
 

@@ -147,7 +147,7 @@ func TestLocateLogFiles_PathCacheTTL(t *testing.T) {
 	jobName := "J1"
 	ext := "list"
 
-	svc := NewLogService(nil, 100)
+	svc := NewLogService(nil, 100, nil)
 
 	// 第一次调用：无文件 → 空结果
 	files, err := svc.locateLogFiles(dir, jobName, ext)

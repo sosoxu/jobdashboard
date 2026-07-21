@@ -6,7 +6,7 @@
           <el-button text :icon="Back" @click="$router.push('/jobs')">返回</el-button>
           <span class="log-title">作业日志：{{ jobDesc || jobName }}</span>
         </div>
-        <div class="muted">项目 {{ project || '-' }} / 工区 {{ survey || '-' }}</div>
+        <div class="muted">作业编号 {{ jobName }}</div>
       </div>
     </div>
 

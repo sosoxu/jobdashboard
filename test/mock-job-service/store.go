@@ -217,7 +217,10 @@ func (s *Store) newJobLocked(status int, commitTs int64) *Job {
 
 // writeLogFiles 在 logRoot 下为作业生成 list 和 LOG 文件，使用新命名方案。
 // 文件名：{jobDesc}.{四位数编号}.{jobName}.list|.log
-// 路径：{logRoot}/{project}/{survey}/list|LOG/...
+// 路径：
+//   - line 为空：{logRoot}/{project}/{survey}/list|LOG/...
+//   - line 非空：{logRoot}/{project}/{survey}/{line}/list|LOG/...
+//
 // 内容是简化的占位文本，主要用于验证 BFF 端的文件定位与读取逻辑。
 func (s *Store) writeLogFiles(j *Job) {
 	attrs := make(map[string]string)
@@ -228,13 +231,19 @@ func (s *Store) writeLogFiles(j *Job) {
 	}
 	project := attrs["project"]
 	survey := attrs["survey"]
+	line := attrs["line"]
 	if project == "" || survey == "" {
 		return
 	}
 	seq := s.counter % 10000 // 0..9999，四位数编号
-	body := fmt.Sprintf("==== mock log for job %s ====\nJobDesc: %s\nProject: %s\nSurvey: %s\nStatus: %s\nExitCode: %d\nTime: %s\n",
-		j.JobName, j.JobDesc, project, survey, j.JobStatus, j.ExitCode,
+	body := fmt.Sprintf("==== mock log for job %s ====\nJobDesc: %s\nProject: %s\nSurvey: %s\nLine: %s\nStatus: %s\nExitCode: %d\nTime: %s\n",
+		j.JobName, j.JobDesc, project, survey, line, j.JobStatus, j.ExitCode,
 		time.Now().Format("2006-01-02 15:04:05"))
+	// 计算工区目录：line 非空时插入测线段
+	surveyDir := filepath.Join(s.logRoot, project, survey)
+	if line != "" {
+		surveyDir = filepath.Join(surveyDir, line)
+	}
 	for _, item := range []struct {
 		subDir, ext string
 		extra       string
@@ -242,7 +251,7 @@ func (s *Store) writeLogFiles(j *Job) {
 		{"list", "list", "\n===  Start of Job Code  === \n-------------- Job Structure --------------\nModule Run Time Information\n..........  Job Done Successful .........."},
 		{"LOG", "log", "\nPrepare Module GeoDiskIn\nLoad Module From : /testdata/geodiskin.so\nModule Execute Phase Complete!"},
 	} {
-		dir := filepath.Join(s.logRoot, project, survey, item.subDir)
+		dir := filepath.Join(surveyDir, item.subDir)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			continue
 		}

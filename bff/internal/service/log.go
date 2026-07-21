@@ -137,16 +137,18 @@ type LogResult struct {
 
 // Read 读取作业日志（分页）。
 //   - 通过 jobName 在 {surveyDir}/list 或 LOG 目录下 glob 定位最新日志文件
+//   - line 非空时目录为 {surveyDir}/{line}/list|LOG（作业含测线数据）
 //   - 无 keyword：扫描到 offset+pageSize 行即停，Total/Sections 优先取缓存
 //   - 有 keyword：扫描整个文件收集匹配行（限 maxScanLines 行），分页返回
 //   - logType=list 时，附带返回段落列表（缓存命中或扫描全文后填充）
-func (s *LogService) Read(ctx context.Context, jobName, project, survey, logType, keyword string, page, pageSize int) (*LogResult, error) {
-	logDir, err := s.resolver.LogDir(project, survey, logType)
+func (s *LogService) Read(ctx context.Context, jobName, project, survey, line, logType, keyword string, page, pageSize int) (*LogResult, error) {
+	logDir, err := s.resolver.LogDir(project, survey, line, logType)
 	if err != nil {
 		s.logger.Error("log.resolve_dir_failed",
 			"jobName", jobName,
 			"project", project,
 			"survey", survey,
+			"line", line,
 			"logType", logType,
 			"err", err)
 		return nil, err
@@ -155,6 +157,7 @@ func (s *LogService) Read(ctx context.Context, jobName, project, survey, logType
 		"jobName", jobName,
 		"project", project,
 		"survey", survey,
+		"line", line,
 		"logType", logType,
 		"logDir", logDir,
 		"keyword", keyword,

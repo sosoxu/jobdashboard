@@ -18,24 +18,24 @@ func NewLogHandler(logs *service.LogService, analyzer service.Analyzer, jobCache
 	return &LogHandler{logs: logs, analyzer: analyzer, jobCache: jobCache}
 }
 
-// resolveProjectSurvey 通过 jobName 在作业缓存中查 project/survey。
-// jobName 全局唯一，前端不再需要传 project/survey；同时 jobDesc 也由 BFF 内部解析。
-// 返回 (project, survey, ok)。
-func (h *LogHandler) resolveProjectSurvey(jobName string) (string, string, bool) {
+// resolveJobLocation 通过 jobName 在作业缓存中查 project/survey/line。
+// jobName 全局唯一，前端不再需要传 project/survey；line 默认为空（无测线）。
+// 返回 (project, survey, line, ok)。
+func (h *LogHandler) resolveJobLocation(jobName string) (string, string, string, bool) {
 	if h.jobCache == nil {
-		return "", "", false
+		return "", "", "", false
 	}
 	jobs, _ := h.jobCache.Snapshot()
 	for i := range jobs {
 		if jobs[i].JobName == jobName {
-			return jobs[i].Project(), jobs[i].Survey(), true
+			return jobs[i].Project(), jobs[i].Survey(), jobs[i].Line(), true
 		}
 	}
-	return "", "", false
+	return "", "", "", false
 }
 
 // GET /api/v1/jobs/:jobName/logs?type=list|log&keyword=&page=1&pageSize=200
-// project/survey 由 BFF 通过 jobName 查作业缓存获取（jobName 全局唯一），前端无需传。
+// project/survey/line 由 BFF 通过 jobName 查作业缓存获取（jobName 全局唯一），前端无需传。
 func (h *LogHandler) Logs(c *gin.Context) {
 	jobName := c.Param("jobName")
 	logType := c.DefaultQuery("type", "list")
@@ -43,13 +43,13 @@ func (h *LogHandler) Logs(c *gin.Context) {
 	page := parsePositiveInt(c.Query("page"), 1)
 	pageSize := parsePositiveInt(c.Query("pageSize"), 0) // 0 → service default
 
-	project, survey, found := h.resolveProjectSurvey(jobName)
+	project, survey, line, found := h.resolveJobLocation(jobName)
 	if !found {
 		failBadRequest(c, "未在作业缓存中找到作业 "+jobName+"，无法解析 project/survey")
 		return
 	}
 
-	res, err := h.logs.Read(c.Request.Context(), jobName, project, survey, logType, keyword, page, pageSize)
+	res, err := h.logs.Read(c.Request.Context(), jobName, project, survey, line, logType, keyword, page, pageSize)
 	if err != nil {
 		failBadRequest(c, err.Error())
 		return
@@ -85,13 +85,13 @@ func (h *LogHandler) Analyze(c *gin.Context) {
 		req.PageSize = 2000
 	}
 
-	project, survey, found := h.resolveProjectSurvey(jobName)
+	project, survey, line, found := h.resolveJobLocation(jobName)
 	if !found {
 		failBadRequest(c, "未在作业缓存中找到作业 "+jobName+"，无法解析 project/survey")
 		return
 	}
 
-	logRes, err := h.logs.Read(c.Request.Context(), jobName, project, survey, req.Type, req.Keyword, req.Page, req.PageSize)
+	logRes, err := h.logs.Read(c.Request.Context(), jobName, project, survey, line, req.Type, req.Keyword, req.Page, req.PageSize)
 	if err != nil {
 		failBadRequest(c, err.Error())
 		return

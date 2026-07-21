@@ -137,10 +137,13 @@ func (j *JobInfo) AttrMap() map[string]string {
 	return m
 }
 
-// Project / Survey / Database extractors (from attributes).
+// Project / Survey / Database / Line extractors (from attributes).
+// Line 为空表示作业不含测线数据；非空时其值为测线名称，
+// 日志文件会落到 {surveyDir}/{line}/list|LOG 下。
 func (j *JobInfo) Project() string  { return j.AttrMap()["project"] }
 func (j *JobInfo) Survey() string   { return j.AttrMap()["survey"] }
 func (j *JobInfo) Database() string { return j.AttrMap()["database"] }
+func (j *JobInfo) Line() string     { return j.AttrMap()["line"] }
 
 // StatusCode parses the jobStatus string into an int.
 func (j *JobInfo) StatusCode() int {

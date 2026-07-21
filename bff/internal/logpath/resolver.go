@@ -103,12 +103,22 @@ func (r *Resolver) LogPath(project, survey, logType string) (string, error) {
 // LogDir 返回指定日志类型对应的"目录"路径。
 // 新方案下，list 与 LOG 均为子目录，目录中存放形如
 // `{jobDesc}.{四位数编号}.{jobName}.list|.log` 的多个日志文件。
-//   - list → {surveyDir}/list
-//   - log  → {surveyDir}/LOG
-func (r *Resolver) LogDir(project, survey, logType string) (string, error) {
+//   - line 为空：list → {surveyDir}/list，log → {surveyDir}/LOG
+//   - line 非空：list → {surveyDir}/{line}/list，log → {surveyDir}/{line}/LOG
+//     （作业含测线数据时，日志落到测线子目录下）
+// line 必须是单段目录名（不允许包含路径分隔符或为 "." / ".."），
+// 从源头避免路径穿越。
+func (r *Resolver) LogDir(project, survey, line, logType string) (string, error) {
 	dir, err := r.SurveyDir(project, survey)
 	if err != nil {
 		return "", err
+	}
+	// line 非空时插入测线段；line 必须是单段目录名，禁止穿越。
+	if line != "" {
+		if !isSafeSingleSegment(line) {
+			return "", fmt.Errorf("invalid line %q: must be a single path segment", line)
+		}
+		dir = filepath.Join(dir, line)
 	}
 	switch strings.ToLower(logType) {
 	case "list":
@@ -118,6 +128,22 @@ func (r *Resolver) LogDir(project, survey, logType string) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown log type %q (want list|log)", logType)
 	}
+}
+
+// isSafeSingleSegment 判断 s 是否为一个安全的单段目录名：
+// 不为空、不为 "." / ".."、不含路径分隔符（/ 或 \）。
+func isSafeSingleSegment(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	if strings.ContainsAny(s, `/\`) {
+		return false
+	}
+	// 清洗后若发生变化（例如含 .. 拼接），也视为不安全
+	if filepath.Clean(s) != s {
+		return false
+	}
+	return true
 }
 
 func (r *Resolver) load() (map[string]string, error) {

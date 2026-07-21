@@ -84,7 +84,28 @@ func (r *Resolver) SurveyDir(project, survey string) (string, error) {
 }
 
 // LogPath returns the file path for a log type ("list" or "log").
+// 保留兼容旧调用方：返回 {surveyDir}/list 或 {surveyDir}/LOG 路径（不区分文件/目录）。
 func (r *Resolver) LogPath(project, survey, logType string) (string, error) {
+	dir, err := r.SurveyDir(project, survey)
+	if err != nil {
+		return "", err
+	}
+	switch strings.ToLower(logType) {
+	case "list":
+		return filepath.Join(dir, "list"), nil
+	case "log":
+		return filepath.Join(dir, "LOG"), nil
+	default:
+		return "", fmt.Errorf("unknown log type %q (want list|log)", logType)
+	}
+}
+
+// LogDir 返回指定日志类型对应的"目录"路径。
+// 新方案下，list 与 LOG 均为子目录，目录中存放形如
+// `{jobDesc}.{四位数编号}.{jobName}.list|.log` 的多个日志文件。
+//   - list → {surveyDir}/list
+//   - log  → {surveyDir}/LOG
+func (r *Resolver) LogDir(project, survey, logType string) (string, error) {
 	dir, err := r.SurveyDir(project, survey)
 	if err != nil {
 		return "", err

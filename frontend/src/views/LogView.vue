@@ -140,8 +140,6 @@ import type { LogResult, AnalyzeResult, LogSection } from '@/api/types'
 
 const route = useRoute()
 const jobName = computed(() => String(route.params.jobName || ''))
-const project = computed(() => String(route.query.project || ''))
-const survey = computed(() => String(route.query.survey || ''))
 const jobDesc = computed(() => String(route.query.jobDesc || ''))
 
 const activeTab = ref<'list' | 'log' | 'ai'>('list')
@@ -190,8 +188,6 @@ async function loadLogs() {
     log.value = await getLogs(jobName.value, {
       type: activeTab.value,
       keyword: keyword.value,
-      project: project.value,
-      survey: survey.value,
       page: page.value,
       pageSize: pageSize.value,
     })
@@ -208,8 +204,6 @@ async function runAnalyze() {
   try {
     analyze.value = await analyzeLogs(jobName.value, {
       type: 'log',
-      project: project.value,
-      survey: survey.value,
       keyword: keyword.value,
       page: 1,
       pageSize: 2000,

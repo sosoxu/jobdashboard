@@ -2,7 +2,7 @@ server:
   port: 18088
 
 upstream:
-  jobServiceURL: "http://127.0.0.1:19292/job/call"
+  jobServiceURL: "http://127.0.0.1:19000/job/call"
   timeoutSec: 10
 
 sampler:

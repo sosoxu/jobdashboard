@@ -4,30 +4,48 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/dashboard/bff/internal/cache"
 	"github.com/dashboard/bff/internal/service"
 )
 
 type LogHandler struct {
 	logs     *service.LogService
 	analyzer service.Analyzer
+	jobCache *cache.JobCache
 }
 
-func NewLogHandler(logs *service.LogService, analyzer service.Analyzer) *LogHandler {
-	return &LogHandler{logs: logs, analyzer: analyzer}
+func NewLogHandler(logs *service.LogService, analyzer service.Analyzer, jobCache *cache.JobCache) *LogHandler {
+	return &LogHandler{logs: logs, analyzer: analyzer, jobCache: jobCache}
 }
 
-// GET /api/v1/jobs/:jobName/logs?type=list|log&keyword=&project=&survey=&page=1&pageSize=200
+// resolveProjectSurvey 通过 jobName 在作业缓存中查 project/survey。
+// jobName 全局唯一，前端不再需要传 project/survey；同时 jobDesc 也由 BFF 内部解析。
+// 返回 (project, survey, ok)。
+func (h *LogHandler) resolveProjectSurvey(jobName string) (string, string, bool) {
+	if h.jobCache == nil {
+		return "", "", false
+	}
+	jobs, _ := h.jobCache.Snapshot()
+	for i := range jobs {
+		if jobs[i].JobName == jobName {
+			return jobs[i].Project(), jobs[i].Survey(), true
+		}
+	}
+	return "", "", false
+}
+
+// GET /api/v1/jobs/:jobName/logs?type=list|log&keyword=&page=1&pageSize=200
+// project/survey 由 BFF 通过 jobName 查作业缓存获取（jobName 全局唯一），前端无需传。
 func (h *LogHandler) Logs(c *gin.Context) {
 	jobName := c.Param("jobName")
 	logType := c.DefaultQuery("type", "list")
 	keyword := c.Query("keyword")
-	project := c.Query("project")
-	survey := c.Query("survey")
 	page := parsePositiveInt(c.Query("page"), 1)
 	pageSize := parsePositiveInt(c.Query("pageSize"), 0) // 0 → service default
 
-	if project == "" || survey == "" {
-		failBadRequest(c, "project 和 survey 为必填参数")
+	project, survey, found := h.resolveProjectSurvey(jobName)
+	if !found {
+		failBadRequest(c, "未在作业缓存中找到作业 "+jobName+"，无法解析 project/survey")
 		return
 	}
 
@@ -43,8 +61,6 @@ func (h *LogHandler) Logs(c *gin.Context) {
 type analyzeReq struct {
 	Type     string `json:"type"`
 	Keyword  string `json:"keyword"`
-	Project  string `json:"project"`
-	Survey   string `json:"survey"`
 	Page     int    `json:"page"`
 	PageSize int    `json:"pageSize"`
 }
@@ -57,8 +73,6 @@ func (h *LogHandler) Analyze(c *gin.Context) {
 	var req analyzeReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		req.Type = c.DefaultQuery("type", "log")
-		req.Project = c.Query("project")
-		req.Survey = c.Query("survey")
 		req.Keyword = c.Query("keyword")
 	}
 	if req.Type == "" {
@@ -70,12 +84,14 @@ func (h *LogHandler) Analyze(c *gin.Context) {
 	if req.PageSize <= 0 {
 		req.PageSize = 2000
 	}
-	if req.Project == "" || req.Survey == "" {
-		failBadRequest(c, "project 和 survey 为必填参数")
+
+	project, survey, found := h.resolveProjectSurvey(jobName)
+	if !found {
+		failBadRequest(c, "未在作业缓存中找到作业 "+jobName+"，无法解析 project/survey")
 		return
 	}
 
-	logRes, err := h.logs.Read(c.Request.Context(), jobName, req.Project, req.Survey, req.Type, req.Keyword, req.Page, req.PageSize)
+	logRes, err := h.logs.Read(c.Request.Context(), jobName, project, survey, req.Type, req.Keyword, req.Page, req.PageSize)
 	if err != nil {
 		failBadRequest(c, err.Error())
 		return

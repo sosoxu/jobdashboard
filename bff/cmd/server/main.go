@@ -117,7 +117,7 @@ func main() {
 	protected.Use(handler.AuthMiddleware(authSvc))
 	dashH := handler.NewDashboardHandler(statsSvc)
 	jobH := handler.NewJobHandler(jobSvc)
-	logH := handler.NewLogHandler(logSvc, analyzer)
+	logH := handler.NewLogHandler(logSvc, analyzer, jobCache)
 	handler.RegisterDashboardRoutes(protected, dashH)
 	handler.RegisterJobRoutes(protected, jobH)
 	handler.RegisterLogRoutes(protected, logH)

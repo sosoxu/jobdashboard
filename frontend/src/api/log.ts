@@ -1,11 +1,10 @@
 import http from './http'
 import type { LogResult, AnalyzeResult } from './types'
 
+// project/survey 由 BFF 通过 jobName 在作业缓存中解析（jobName 全局唯一）。
 export interface LogParams {
   type: 'list' | 'log'
   keyword?: string
-  project: string
-  survey: string
   page?: number
   pageSize?: number
 }
@@ -18,8 +17,6 @@ export function analyzeLogs(
   jobName: string,
   body: {
     type: 'list' | 'log'
-    project: string
-    survey: string
     keyword?: string
     page?: number
     pageSize?: number

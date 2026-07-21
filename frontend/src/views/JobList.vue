@@ -377,7 +377,7 @@ function viewLogs(row: JobListItem) {
   router.push({
     name: 'logs',
     params: { jobName: row.jobName },
-    query: { project: row.project, survey: row.survey, jobDesc: row.jobDesc },
+    query: { jobDesc: row.jobDesc },
   })
 }
 

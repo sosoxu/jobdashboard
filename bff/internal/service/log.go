@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dashboard/bff/internal/logpath"
 )
@@ -21,15 +23,25 @@ const (
 	// maxScanLines 限制单次扫描的最大行数，防止 GB 级文件 OOM。
 	// 1 百万行通常已覆盖实际过滤需求；超过则置 truncated=true。
 	maxScanLines = 1_000_000
+	// pathCacheTTL 是日志文件路径解析结果（glob 找到的最新文件）的缓存有效期。
+	// 在百万级文件目录下，频繁 glob 会带来可观开销；分页浏览期间使用缓存避免重复 glob。
+	pathCacheTTL = 60 * time.Second
 )
 
 // LogService reads job log files from the filesystem with pagination support.
 // 日志文件为原始文本内容，不做级别分类。list 文件支持段落快速定位。
+//
+// 文件定位规则（jobName 全局唯一）：
+//   - 目录：{surveyDir}/list 或 {surveyDir}/LOG
+//   - 文件名：{jobDesc}.{四位数编号}.{jobName}.list 或 .log
+//   - 多个匹配时取 mtime 最新；mtime 相同时取编号最大者
+//   - 使用 filepath.Glob 在内核侧做名字过滤，避免 ReadDir 全量遍历
 type LogService struct {
-	resolver  *logpath.Resolver
-	maxLines  int
-	cache     *logCache
-	maxScan   int
+	resolver *logpath.Resolver
+	maxLines int
+	cache    *logCache
+	pathCache *pathCache
+	maxScan  int
 }
 
 type logCache struct {
@@ -43,15 +55,49 @@ type logCacheEntry struct {
 	sections  []LogSection // 仅 list 类型有值
 }
 
+// pathCache 缓存"日志目录 + jobName + ext"到"最新文件路径"的解析结果。
+// 缓存项带 TTL（pathCacheTTL）；TTL 内复用结果，避免对百万级文件目录反复 glob。
+// 注意：缓存命中后，调用方仍会通过文件 mtime/size 签名判断行数缓存是否有效，
+// 一旦文件被替换或追加，签名变化会自然失效下层行数缓存。
+type pathCache struct {
+	mu    sync.RWMutex
+	items map[string]pathCacheEntry
+}
+
+type pathCacheEntry struct {
+	file      string
+	checkedAt time.Time
+}
+
+func newPathCache() *pathCache {
+	return &pathCache{items: make(map[string]pathCacheEntry)}
+}
+
+func (p *pathCache) get(key string) (string, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if e, ok := p.items[key]; ok && time.Since(e.checkedAt) < pathCacheTTL {
+		return e.file, true
+	}
+	return "", false
+}
+
+func (p *pathCache) set(key, file string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.items[key] = pathCacheEntry{file: file, checkedAt: time.Now()}
+}
+
 func NewLogService(resolver *logpath.Resolver, maxLines int) *LogService {
 	if maxLines <= 0 {
 		maxLines = 5000
 	}
 	return &LogService{
-		resolver: resolver,
-		maxLines: maxLines,
-		maxScan:  maxScanLines,
-		cache:    &logCache{items: make(map[string]logCacheEntry)},
+		resolver:  resolver,
+		maxLines:  maxLines,
+		maxScan:   maxScanLines,
+		cache:     &logCache{items: make(map[string]logCacheEntry)},
+		pathCache: newPathCache(),
 	}
 }
 
@@ -84,11 +130,12 @@ type LogResult struct {
 }
 
 // Read 读取作业日志（分页）。
-//   - 无 keyword：扫描到 offset+pageSize 行即停，Total/Sections 优先取缓存。
-//   - 有 keyword：扫描整个文件收集匹配行（限 maxScanLines 行），分页返回。
-//   - logType=list 时，附带返回段落列表（缓存命中或扫描全文后填充）。
+//   - 通过 jobName 在 {surveyDir}/list 或 LOG 目录下 glob 定位最新日志文件
+//   - 无 keyword：扫描到 offset+pageSize 行即停，Total/Sections 优先取缓存
+//   - 有 keyword：扫描整个文件收集匹配行（限 maxScanLines 行），分页返回
+//   - logType=list 时，附带返回段落列表（缓存命中或扫描全文后填充）
 func (s *LogService) Read(ctx context.Context, jobName, project, survey, logType, keyword string, page, pageSize int) (*LogResult, error) {
-	path, err := s.resolver.LogPath(project, survey, logType)
+	logDir, err := s.resolver.LogDir(project, survey, logType)
 	if err != nil {
 		return nil, err
 	}
@@ -103,12 +150,17 @@ func (s *LogService) Read(ctx context.Context, jobName, project, survey, logType
 		pageSize = maxPageSize
 	}
 
-	files, err := logFiles(path)
+	ext := logExt(logType)
+	files, err := s.locateLogFiles(logDir, jobName, ext)
 	if err != nil {
 		return nil, err
 	}
 
 	isList := strings.EqualFold(logType, "list")
+	path := ""
+	if len(files) > 0 {
+		path = files[0]
+	}
 	out := &LogResult{
 		JobName:  jobName,
 		Type:     logType,
@@ -122,10 +174,112 @@ func (s *LogService) Read(ctx context.Context, jobName, project, survey, logType
 		Sections: nil,
 	}
 
+	if len(files) == 0 {
+		// 没有匹配的日志文件：返回空结果（total=0），避免 500 错误。
+		out.Total = 0
+		return out, nil
+	}
+
 	if keyword != "" {
 		return s.readFiltered(ctx, out, files, isList, keyword, page, pageSize)
 	}
 	return s.readRaw(ctx, out, files, isList, page, pageSize)
+}
+
+// locateLogFiles 通过 jobName 在 logDir 下 glob 定位日志文件，取最新一个返回。
+// 路径解析结果带 TTL 缓存，避免分页浏览期间反复 glob。
+func (s *LogService) locateLogFiles(logDir, jobName, ext string) ([]string, error) {
+	cacheKey := logDir + "|" + jobName + "|" + ext
+	if file, ok := s.pathCache.get(cacheKey); ok && file != "" {
+		// 缓存命中：复用上次的解析结果。若文件已被删除则 fallthrough 重新 glob。
+		if _, err := os.Stat(file); err == nil {
+			return []string{file}, nil
+		}
+	}
+
+	file, err := findLatestLog(logDir, jobName, ext)
+	if err != nil {
+		return nil, err
+	}
+	if file == "" {
+		// 没有匹配文件：不写缓存，让下次请求重新尝试。
+		return nil, nil
+	}
+	s.pathCache.set(cacheKey, file)
+	return []string{file}, nil
+}
+
+// logExt 返回日志文件后缀（不含点）。
+func logExt(logType string) string {
+	if strings.EqualFold(logType, "log") {
+		return "log"
+	}
+	return "list"
+}
+
+// findLatestLog 在 logDir 中查找形如 *.{jobName}.{ext} 的文件，返回最新一个。
+// 排序规则：mtime 降序（主），编号降序（次）。
+// 返回空字符串表示无匹配。
+func findLatestLog(logDir, jobName, ext string) (string, error) {
+	pattern := filepath.Join(logDir, "*."+jobName+"."+ext)
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return "", fmt.Errorf("glob 日志文件失败 %s: %w", pattern, err)
+	}
+	if len(matches) == 0 {
+		return "", nil
+	}
+	type candidate struct {
+		path  string
+		mtime time.Time
+		seq   int // 四位数编号；解析失败按 -1 处理（落到最后）
+	}
+	cands := make([]candidate, 0, len(matches))
+	for _, m := range matches {
+		info, err := os.Stat(m)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		cands = append(cands, candidate{
+			path:  m,
+			mtime: info.ModTime(),
+			seq:   parseSeqNumber(filepath.Base(m), jobName, ext),
+		})
+	}
+	if len(cands) == 0 {
+		return "", nil
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		// mtime 降序
+		if !cands[i].mtime.Equal(cands[j].mtime) {
+			return cands[i].mtime.After(cands[j].mtime)
+		}
+		// 编号降序
+		return cands[i].seq > cands[j].seq
+	})
+	return cands[0].path, nil
+}
+
+// parseSeqNumber 从文件名 `{jobDesc}.{编号}.{jobName}.{ext}` 中提取四位数编号。
+// 解析失败返回 -1（参与排序时落在最后）。
+func parseSeqNumber(base, jobName, ext string) int {
+	// 去掉后缀 .{ext}
+	suffix := "." + jobName + "." + ext
+	if !strings.HasSuffix(base, suffix) {
+		return -1
+	}
+	core := strings.TrimSuffix(base, suffix)
+	// 取最后一个 "." 后的段，应为四位数编号
+	idx := strings.LastIndexByte(core, '.')
+	if idx < 0 {
+		return -1
+	}
+	seqStr := core[idx+1:]
+	n, err := strconv.Atoi(seqStr)
+	if err != nil || n < 0 {
+		return -1
+	}
+	return n
 }
 
 // readRaw 无过滤分页：
@@ -312,31 +466,6 @@ func filesSignature(files []string) string {
 		fmt.Fprintf(&b, "%s|%d|%d|", f, info.ModTime().UnixNano(), info.Size())
 	}
 	return b.String()
-}
-
-// logFiles returns the list of files to read for a path. If path is a file,
-// returns [path]. If path is a directory, returns its regular files sorted.
-func logFiles(path string) ([]string, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("日志路径不可访问: %s (%w)", path, err)
-	}
-	if !info.IsDir() {
-		return []string{path}, nil
-	}
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return nil, fmt.Errorf("读取日志目录失败: %w", err)
-	}
-	var files []string
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		files = append(files, filepath.Join(path, e.Name()))
-	}
-	sort.Strings(files)
-	return files, nil
 }
 
 func newBigScanner(fh *os.File) *bufio.Scanner {

@@ -22,6 +22,11 @@ frontend/components.d.ts
 *.png
 logs/
 
+# Generated test log files (mock-job-service -logroot / gen_logs.py 产出，
+# 文件名形如 {jobDesc}.{编号}.{jobName}.list|.log；本地测试时按需重新生成)
+test/ngp_root/data/**/list/
+test/ngp_root/data/**/LOG/
+
 # Compiled binaries
 test/mock-job-service/mock-job-service
 

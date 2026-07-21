@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -67,12 +69,14 @@ type Store struct {
 	jobs    map[string]*Job // jobName -> job
 	counter int             // 作业编号自增
 	rng     *rand.Rand
+	logRoot string // 非空时为作业生成对应的 list/LOG 日志文件（用于测试新命名方案）
 }
 
-func NewStore() *Store {
+func NewStore(logRoot string) *Store {
 	s := &Store{
-		jobs: make(map[string]*Job),
-		rng:  rand.New(rand.NewSource(time.Now().UnixNano())),
+		jobs:    make(map[string]*Job),
+		rng:     rand.New(rand.NewSource(time.Now().UnixNano())),
+		logRoot: logRoot,
 	}
 	s.seed()
 	return s
@@ -203,7 +207,49 @@ func (s *Store) newJobLocked(status int, commitTs int64) *Job {
 		j.JobProcess = s.rng.Intn(60)
 	}
 	s.jobs[jobName] = j
+	// 若启用 logRoot，按新命名方案为作业生成对应的 list/LOG 文件。
+	// 文件名：{jobDesc}.{四位数编号}.{jobName}.list|.log
+	if s.logRoot != "" {
+		s.writeLogFiles(j)
+	}
 	return j
+}
+
+// writeLogFiles 在 logRoot 下为作业生成 list 和 LOG 文件，使用新命名方案。
+// 文件名：{jobDesc}.{四位数编号}.{jobName}.list|.log
+// 路径：{logRoot}/{project}/{survey}/list|LOG/...
+// 内容是简化的占位文本，主要用于验证 BFF 端的文件定位与读取逻辑。
+func (s *Store) writeLogFiles(j *Job) {
+	attrs := make(map[string]string)
+	for _, a := range j.Attributes {
+		if idx := strings.Index(a, "="); idx > 0 {
+			attrs[a[:idx]] = a[idx+1:]
+		}
+	}
+	project := attrs["project"]
+	survey := attrs["survey"]
+	if project == "" || survey == "" {
+		return
+	}
+	seq := s.counter % 10000 // 0..9999，四位数编号
+	body := fmt.Sprintf("==== mock log for job %s ====\nJobDesc: %s\nProject: %s\nSurvey: %s\nStatus: %s\nExitCode: %d\nTime: %s\n",
+		j.JobName, j.JobDesc, project, survey, j.JobStatus, j.ExitCode,
+		time.Now().Format("2006-01-02 15:04:05"))
+	for _, item := range []struct {
+		subDir, ext string
+		extra       string
+	}{
+		{"list", "list", "\n===  Start of Job Code  === \n-------------- Job Structure --------------\nModule Run Time Information\n..........  Job Done Successful .........."},
+		{"LOG", "log", "\nPrepare Module GeoDiskIn\nLoad Module From : /testdata/geodiskin.so\nModule Execute Phase Complete!"},
+	} {
+		dir := filepath.Join(s.logRoot, project, survey, item.subDir)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			continue
+		}
+		name := fmt.Sprintf("%s.%04d.%s.%s", j.JobDesc, seq, j.JobName, item.ext)
+		path := filepath.Join(dir, name)
+		_ = os.WriteFile(path, []byte(body+item.extra+"\n"), 0o644)
+	}
 }
 
 // Evolve 推进作业状态，模拟真实调度行为

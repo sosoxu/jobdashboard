@@ -24,9 +24,13 @@ import (
 func main() {
 	addr := flag.String("addr", ":18080", "监听地址")
 	evolve := flag.Duration("evolve", 5*time.Second, "作业状态演进间隔，0 表示关闭")
+	logRoot := flag.String("logroot", "", "非空时为每个作业在 {logroot}/{project}/{survey}/list|LOG 下生成对应日志文件（用于测试新命名方案）")
 	flag.Parse()
 
-	store := NewStore()
+	store := NewStore(*logRoot)
+	if *logRoot != "" {
+		log.Printf("[mock] 已启用日志文件生成，logroot=%s", *logRoot)
+	}
 
 	// 后台状态演进，模拟真实调度
 	if *evolve > 0 {

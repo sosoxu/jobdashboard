@@ -59,7 +59,9 @@ export interface JobListItem {
   jobProcess: number
   project: string
   survey: string
+  line: string
   database: string
+  ctrlNode: string
   department: string
   application: string
   execTime: number

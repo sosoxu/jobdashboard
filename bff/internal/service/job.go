@@ -65,7 +65,9 @@ type JobListItem struct {
 	JobProcess     int    `json:"jobProcess"`
 	Project        string `json:"project"`
 	Survey         string `json:"survey"`
+	Line           string `json:"line"`
 	Database       string `json:"database"`
+	CtrlNode       string `json:"ctrlNode"`
 	Department     string `json:"department"`
 	Application    string `json:"application"`
 	ExecTime       uint   `json:"execTime"`
@@ -185,7 +187,9 @@ func (s *JobService) List(ctx context.Context, q JobListQuery) (*JobListResult, 
 			JobProcess:     j.JobProcess,
 			Project:        j.Project(),
 			Survey:         j.Survey(),
+			Line:           j.Line(),
 			Database:       j.Database(),
+			CtrlNode:       j.CtrlNode,
 			Department:     j.Department,
 			Application:    j.Application,
 			ExecTime:       j.ExecTime,

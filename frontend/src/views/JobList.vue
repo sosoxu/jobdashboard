@@ -134,25 +134,33 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="jobDesc" label="作业名称" min-width="180" show-overflow-tooltip />
-        <el-table-column label="状态" width="100">
+        <el-table-column prop="jobName" label="作业编号" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="jobDesc" label="作业名" min-width="180" show-overflow-tooltip />
+        <el-table-column label="作业状态" width="100">
           <template #default="{ row }">
             <el-tag :type="stateMeta(row.jobStatus).type" size="small">{{ row.jobStatusLabel }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="userName" label="用户" width="110" />
+        <el-table-column prop="project" label="项目" width="120" show-overflow-tooltip />
+        <el-table-column prop="survey" label="工区" width="120" show-overflow-tooltip />
+        <el-table-column label="测线" width="110" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.line">{{ row.line }}</span>
+            <span v-else class="muted">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="ctrlNode" label="控制结点" width="130" show-overflow-tooltip />
         <el-table-column label="进度" width="140">
           <template #default="{ row }">
             <el-progress :percentage="row.jobProcess" :stroke-width="10" />
           </template>
         </el-table-column>
-        <el-table-column prop="survey" label="工区" width="120" show-overflow-tooltip />
-        <el-table-column prop="project" label="项目" width="120" show-overflow-tooltip />
-        <el-table-column label="运行时间" width="100">
-          <template #default="{ row }">{{ fmtDuration(row.execTime) }}</template>
-        </el-table-column>
         <el-table-column label="提交时间" width="160">
           <template #default="{ row }">{{ fmtTime(row.commitTime) }}</template>
+        </el-table-column>
+        <el-table-column label="运行时间" width="100">
+          <template #default="{ row }">{{ fmtDuration(row.execTime) }}</template>
         </el-table-column>
         <el-table-column label="操作" width="240" fixed="right">
           <template #default="{ row }">
@@ -210,8 +218,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, reactive, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { Search, RefreshLeft } from '@element-plus/icons-vue'
 import type { TableInstance } from 'element-plus'
@@ -224,6 +232,7 @@ import { fmtTime, fmtDuration } from '@/utils/format'
 import { useUserStore } from '@/stores/user'
 
 const router = useRouter()
+const route = useRoute()
 const userStore = useUserStore()
 
 const jobs = ref<JobListItem[]>([])
@@ -237,7 +246,16 @@ const expandedJobName = ref<string>('')
 
 // When enabled, the query is restricted to the current user's jobs,
 // overriding the multi-select userName filter below.
-const onlyMine = ref(false)
+// 状态持久化到路由 query，从日志页返回时能恢复"仅我的"开关状态。
+const onlyMine = ref(route.query.onlyMine === '1')
+
+// onlyMine 变化时同步到路由 query（不触发导航跳转）。
+watch(onlyMine, (v) => {
+  const next = { ...route.query }
+  if (v) next.onlyMine = '1'
+  else delete next.onlyMine
+  router.replace({ query: next })
+})
 
 // Multi-select filter values. Status is number[] (enum codes); the rest are
 // string[] populated from the /jobs/filters endpoint.

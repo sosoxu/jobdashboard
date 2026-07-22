@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -21,16 +22,49 @@ func Open(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	// Single writer model; allow reads in parallel.
-	if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
-		db.Close()
-		return nil, err
+
+	// 显式设置所有 pragma，不依赖 DSN（modernc.org/sqlite 的 DSN pragma 解析
+	// 在某些版本可能不生效）。
+	pragmas := []string{
+		"PRAGMA journal_mode=WAL;",      // WAL 模式：读写不互斥
+		"PRAGMA busy_timeout=5000;",     // 锁等待最多 5s
+		"PRAGMA synchronous=NORMAL;",    // WAL 下安全且更快
+		"PRAGMA cache_size=-8000;",      // 8MB 页缓存
+		"PRAGMA foreign_keys=ON;",
 	}
+	for _, p := range pragmas {
+		if _, err := db.Exec(p); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("pragma %q: %w", p, err)
+		}
+	}
+
+	// 连接池配置：允许并发读，限制最大连接数避免 SQLite "database is locked"。
+	// modernc.org/sqlite 在 WAL 模式下支持多连接并发读。
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+
+	// 启动时验证 pragma 实际生效情况，输出到日志。
+	verifyPragmas(db)
+
 	if err := migrate(db); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return db, nil
+}
+
+// verifyPragmas 读取并打印 SQLite 关键 pragma 的实际值，便于生产诊断。
+func verifyPragmas(db *sql.DB) {
+	checks := []string{"journal_mode", "busy_timeout", "synchronous", "cache_size"}
+	for _, name := range checks {
+		var val string
+		if err := db.QueryRow("PRAGMA " + name).Scan(&val); err != nil {
+			slog.Warn("sqlite pragma verify failed", "pragma", name, "err", err)
+			continue
+		}
+		slog.Info("sqlite pragma", "name", name, "value", val)
+	}
 }
 
 func migrate(db *sql.DB) error {

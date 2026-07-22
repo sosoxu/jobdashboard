@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -17,10 +18,11 @@ type StatsService struct {
 	statsRepo *store.StatsRepo
 	userRepo  *store.UserRepo
 	jobCache  *cache.JobCache
+	logger    *slog.Logger
 }
 
 func NewStatsService(client *upstream.Client, statsRepo *store.StatsRepo, userRepo *store.UserRepo, jobCache *cache.JobCache) *StatsService {
-	return &StatsService{client: client, statsRepo: statsRepo, userRepo: userRepo, jobCache: jobCache}
+	return &StatsService{client: client, statsRepo: statsRepo, userRepo: userRepo, jobCache: jobCache, logger: slog.Default()}
 }
 
 // correctByExitCode 按 exitCode 修正 snapshot：jsFinished + exitCode!=0 的作业
@@ -59,16 +61,17 @@ type StatsResult struct {
 }
 
 func (s *StatsService) Stats(ctx context.Context, fresh bool) (*StatsResult, error) {
+	t0 := time.Now()
 	var cur model.StatsSnapshot
 	degraded := false
 
 	if fresh {
+		t1 := time.Now()
 		if snap, err := s.client.GetCurrentJSFInfo(ctx); err == nil {
 			cur = *snap
-			// 上游聚合不感知 exitCode，用全量缓存修正 Finish/Failed。
 			s.correctByExitCode(&cur)
+			s.logger.Info("stats.timing", "step", "upstream GetCurrentJSFInfo", "dur", time.Since(t1).String())
 		} else {
-			// 上游失败：降级到 DB 最新快照；DB 也无数据则返回空统计。
 			degraded = true
 			latest, lerr := s.statsRepo.Latest()
 			if lerr == nil {
@@ -76,30 +79,40 @@ func (s *StatsService) Stats(ctx context.Context, fresh bool) (*StatsResult, err
 			} else {
 				cur = model.StatsSnapshot{Ts: time.Now().Unix()}
 			}
+			s.logger.Info("stats.timing", "step", "upstream_failed_fallback_db", "dur", time.Since(t1).String(), "upstream_err", err.Error())
 		}
 	} else {
+		t1 := time.Now()
 		latest, err := s.statsRepo.Latest()
+		dbDur := time.Since(t1)
 		if err == nil {
 			cur = latest
+			s.logger.Info("stats.timing", "step", "db Latest", "dur", dbDur.String())
 		} else {
 			// DB 无快照：尝试上游一次；上游也失败则返回空统计 + 降级。
+			t2 := time.Now()
 			if snap, e2 := s.client.GetCurrentJSFInfo(ctx); e2 == nil {
 				cur = *snap
 				s.correctByExitCode(&cur)
+				s.logger.Info("stats.timing", "step", "db_empty_upstream", "dur", time.Since(t2).String())
 			} else {
 				degraded = true
 				cur = model.StatsSnapshot{Ts: time.Now().Unix()}
+				s.logger.Info("stats.timing", "step", "db_empty_upstream_failed", "dur", time.Since(t2).String(), "err", e2.Error())
 			}
 		}
 	}
 
 	// Previous snapshot: latest strictly older than current ts.
 	var prev model.StatsSnapshot
+	t1 := time.Now()
 	if p, err := s.statsRepo.PreviousBefore(cur.Ts); err == nil {
 		prev = p
 	}
+	s.logger.Info("stats.timing", "step", "db PreviousBefore", "dur", time.Since(t1).String())
 
 	groups := buildGroups(cur, prev)
+	s.logger.Info("stats.timing", "step", "total", "dur", time.Since(t0).String(), "degraded", degraded)
 	return &StatsResult{UpdatedAt: cur.Ts, Groups: groups, Degraded: degraded}, nil
 }
 
@@ -147,6 +160,7 @@ type TrendResult struct {
 }
 
 func (s *StatsService) Trend(ctx context.Context, r string) (*TrendResult, error) {
+	t0 := time.Now()
 	now := time.Now()
 	var from int64
 	switch r {
@@ -160,11 +174,16 @@ func (s *StatsService) Trend(ctx context.Context, r string) (*TrendResult, error
 		r = "24h"
 		from = now.Add(-24 * time.Hour).Unix()
 	}
+	t1 := time.Now()
 	snaps, err := s.statsRepo.Range(from, now.Unix())
+	dbDur := time.Since(t1)
 	if err != nil {
+		s.logger.Info("trend.timing", "step", "db Range FAILED", "dur", dbDur.String(), "err", err.Error())
 		return nil, err
 	}
+	s.logger.Info("trend.timing", "step", "db Range", "dur", dbDur.String(), "rows", len(snaps))
 	points := aggregate(snaps, r)
+	s.logger.Info("trend.timing", "step", "total", "dur", time.Since(t0).String())
 	return &TrendResult{Range: r, Points: points}, nil
 }
 
@@ -229,14 +248,23 @@ type TopUsersResult struct {
 }
 
 func (s *StatsService) TopUsers(ctx context.Context, limit int) (*TopUsersResult, error) {
+	t0 := time.Now()
 	if limit <= 0 {
 		limit = 10
 	}
+	t1 := time.Now()
 	ts, stats, err := s.userRepo.TopAtLatest(limit)
+	dbDur := time.Since(t1)
 	if err != nil {
+		s.logger.Info("topusers.timing", "step", "db TopAtLatest FAILED", "dur", dbDur.String(), "err", err.Error())
 		return nil, err
 	}
+	s.logger.Info("topusers.timing", "step", "db TopAtLatest", "dur", dbDur.String(), "rows", len(stats))
+
+	t2 := time.Now()
 	total, _ := s.userRepo.TotalAtLatest()
+	s.logger.Info("topusers.timing", "step", "db TotalAtLatest", "dur", time.Since(t2).String(), "total", total)
+
 	if total == 0 && len(stats) > 0 {
 		for _, s := range stats {
 			total += s.JobCount
@@ -258,6 +286,7 @@ func (s *StatsService) TopUsers(ctx context.Context, limit int) (*TopUsersResult
 		othersPct = float64(othersCount) / float64(total) * 100
 	}
 	result.Others = TopUser{UserName: "其他", Count: othersCount, Pct: round1(othersPct)}
+	s.logger.Info("topusers.timing", "step", "total", "dur", time.Since(t0).String())
 	return result, nil
 }
 

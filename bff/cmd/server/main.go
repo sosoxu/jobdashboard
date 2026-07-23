@@ -59,8 +59,10 @@ func main() {
 	userRepo := store.NewUserRepo(db)
 	authRepo := store.NewAuthRepo(db)
 
-	// Upstream client.
-	client := upstream.New(cfg.Upstream.JobServiceURL, cfg.Upstream.TimeoutSec)
+	// Upstream client. 生产环境通过 RESTFULIP/JSF_SERVER + RESTFULPORT
+	// 环境变量解析地址；环境变量未设置时回退配置文件。
+	upstreamURL := cfg.Upstream.ResolveURL()
+	client := upstream.New(upstreamURL, cfg.Upstream.TimeoutSec)
 
 	// In-memory full-job cache (shared by sampler and job list/filter service).
 	jobCache := cache.NewJobCache()

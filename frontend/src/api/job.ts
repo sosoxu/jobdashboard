@@ -38,8 +38,20 @@ export function getJobs(params: JobListParams): Promise<JobListResult> {
   })
 }
 
-export function getJobFilters(): Promise<JobFilters> {
-  return http.get('/jobs/filters')
+export interface JobFilterParams {
+  /** 选中数据库（用于级联收窄 project/survey 候选值） */
+  database?: string[]
+  /** 选中项目（用于级联收窄 survey 候选值） */
+  project?: string[]
+}
+
+export function getJobFilters(params?: JobFilterParams): Promise<JobFilters> {
+  return http.get('/jobs/filters', {
+    params: {
+      database: joinMulti(params?.database),
+      project: joinMulti(params?.project),
+    },
+  })
 }
 
 export function controlJobs(

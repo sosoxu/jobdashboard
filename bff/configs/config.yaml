@@ -2,7 +2,11 @@ server:
   port: 18088
 
 upstream:
-  jobServiceURL: "http://130.1.100.152:18080/job/call"
+  # jobServiceURL 仅作开发/测试回退；生产环境通过环境变量注入地址：
+  #   RESTFULIP（或 JSF_SERVER）：作业监控服务 IP
+  #   RESTFULPORT：作业监控服务端口（缺省 18080）
+  # 环境变量设置后优先于本配置生效。
+  jobServiceURL: "http://127.0.0.1:19000/job/call"
   timeoutSec: 10
 
 sampler:

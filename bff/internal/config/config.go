@@ -2,10 +2,23 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 
 	"gopkg.in/yaml.v3"
+)
+
+// 上游作业监控服务地址解析所需的环境变量。
+// 生产环境通过这些环境变量注入服务地址，而非在配置文件中写死 IP。
+const (
+	envRestfulIP   = "RESTFULIP" // 作业监控服务 IP（优先）
+	envJSFServer   = "JSF_SERVER" // 作业监控服务 IP（RESTFULIP 为空时的回退）
+	envRestfulPort = "RESTFULPORT" // 作业监控服务端口
+	defaultUpstreamPort = 18080    // 端口环境变量为空时的默认值
+	upstreamPath        = "/job/call" // 上游统一入口路径
 )
 
 type Config struct {
@@ -23,8 +36,54 @@ type ServerCfg struct {
 }
 
 type UpstreamCfg struct {
+	// JobServiceURL 仅作为开发/测试环境的回退地址。
+	// 生产环境应通过环境变量 RESTFULIP/JSF_SERVER + RESTFULPORT 注入，
+	// 见 ResolveURL。
 	JobServiceURL string `yaml:"jobServiceURL"`
 	TimeoutSec    int    `yaml:"timeoutSec"`
+}
+
+// ResolveURL 解析上游作业监控服务的完整 URL。
+//
+// 解析优先级：
+//  1. 环境变量 RESTFULIP（IP） + RESTFULPORT（端口，缺省 18080）
+//  2. 环境变量 JSF_SERVER（IP，RESTFULIP 为空时回退） + RESTFULPORT
+//  3. 配置文件 upstream.jobServiceURL（开发/测试回退）
+//
+// 生产环境通过环境变量注入地址，避免在配置文件中写死 IP；
+// 当环境变量均未设置时，回退到配置文件中的 jobServiceURL，保证开发流程不变。
+func (u *UpstreamCfg) ResolveURL() string {
+	ip := strings.TrimSpace(os.Getenv(envRestfulIP))
+	if ip == "" {
+		ip = strings.TrimSpace(os.Getenv(envJSFServer))
+	}
+	if ip != "" {
+		port := resolveUpstreamPort()
+		url := fmt.Sprintf("http://%s:%d%s", ip, port, upstreamPath)
+		slog.Info("upstream url resolved from env",
+			"envIP", envRestfulIP, "envPort", envRestfulPort,
+			"ip", ip, "port", port, "url", url)
+		return url
+	}
+	// 环境变量未设置：回退配置文件（开发/测试）
+	slog.Info("upstream url from config (env vars not set)",
+		"jobServiceURL", u.JobServiceURL)
+	return u.JobServiceURL
+}
+
+// resolveUpstreamPort 从 RESTFULPORT 读取端口，非法或为空时返回默认值 18080。
+func resolveUpstreamPort() int {
+	raw := strings.TrimSpace(os.Getenv(envRestfulPort))
+	if raw == "" {
+		return defaultUpstreamPort
+	}
+	port, err := strconv.Atoi(raw)
+	if err != nil || port <= 0 || port > 65535 {
+		slog.Warn("invalid RESTFULPORT, using default",
+			"raw", raw, "default", defaultUpstreamPort)
+		return defaultUpstreamPort
+	}
+	return port
 }
 
 type SamplerCfg struct {

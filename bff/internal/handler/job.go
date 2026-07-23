@@ -40,9 +40,13 @@ func (h *JobHandler) List(c *gin.Context) {
 	ok(c, res)
 }
 
-// GET /api/v1/jobs/filters
+// GET /api/v1/jobs/filters?database=db1,db2&project=p1
+// 可选 database/project 参数用于级联过滤：projects 受 database 收窄，
+// surveys 受 database+project 收窄；databases/users 始终全量。
 func (h *JobHandler) Filters(c *gin.Context) {
-	res, err := h.jobs.Filters(c.Request.Context())
+	dbFilter := splitCSV(c.Query("database"))
+	projFilter := splitCSV(c.Query("project"))
+	res, err := h.jobs.Filters(c.Request.Context(), dbFilter, projFilter)
 	if err != nil {
 		failInternal(c, "获取过滤候选值失败: "+err.Error())
 		return

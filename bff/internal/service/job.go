@@ -222,28 +222,49 @@ type JobFilters struct {
 
 // Filters returns the distinct project/survey/user/database values extracted
 // from the cached full job snapshot, for the frontend's multi-select dropdowns.
-func (s *JobService) Filters(ctx context.Context) (*JobFilters, error) {
+//
+// 级联过滤：database/project/survey 是层次隶属关系（工区属于项目，项目属于数据库）。
+// 当 dbFilter 非空时，projects/surveys 仅返回这些数据库下的候选值；
+// 当 projFilter 非空时，surveys 进一步收窄到这些项目下的候选值。
+// databases/users 始终返回全量（顶层与独立维度，不受级联影响）。
+func (s *JobService) Filters(ctx context.Context, dbFilter, projFilter []string) (*JobFilters, error) {
 	if err := s.ensureFresh(ctx); err != nil {
 		return nil, err
 	}
 	jobs, ts := s.cache.Snapshot()
+
+	dbSet := toLowerSet(dbFilter)
+	projSetFilter := toLowerSet(projFilter)
+
 	projSet := newOrderedSet()
 	surveySet := newOrderedSet()
 	userSet := newOrderedSet()
-	dbSet := newOrderedSet()
+	allDBSet := newOrderedSet()
 	for i := range jobs {
 		j := &jobs[i]
-		if v := j.Project(); v != "" {
-			projSet.add(v)
+		db := j.Database()
+		if db != "" {
+			allDBSet.add(db)
 		}
-		if v := j.Survey(); v != "" {
-			surveySet.add(v)
+		// 层级过滤：database -> project -> survey
+		if len(dbSet) > 0 && !dbSet[strings.ToLower(db)] {
+			continue
 		}
+		proj := j.Project()
+		if proj != "" {
+			// projects 受 dbFilter 收窄
+			projSet.add(proj)
+		}
+		if len(projSetFilter) > 0 && !projSetFilter[strings.ToLower(proj)] {
+			continue
+		}
+		// surveys 受 dbFilter + projFilter 收窄
+		if sv := j.Survey(); sv != "" {
+			surveySet.add(sv)
+		}
+		// users 不参与级联，始终全量
 		if v := j.UserName; v != "" {
 			userSet.add(v)
-		}
-		if v := j.Database(); v != "" {
-			dbSet.add(v)
 		}
 	}
 	return &JobFilters{
@@ -251,7 +272,7 @@ func (s *JobService) Filters(ctx context.Context) (*JobFilters, error) {
 		Projects:  projSet.slice(),
 		Surveys:   surveySet.slice(),
 		Users:     userSet.slice(),
-		Databases: dbSet.slice(),
+		Databases: allDBSet.slice(),
 	}, nil
 }
 

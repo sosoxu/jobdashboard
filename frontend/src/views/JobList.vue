@@ -15,6 +15,21 @@
             <el-option v-for="o in STATUS_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
           </el-select>
         </el-form-item>
+        <el-form-item label="数据库">
+          <el-select
+            v-model="filter.database"
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+            filterable
+            placeholder="全部"
+            clearable
+            style="width: 180px"
+            @change="onDatabaseChange"
+          >
+            <el-option v-for="v in filtersData.databases" :key="v" :label="v" :value="v" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="项目">
           <el-select
             v-model="filter.project"
@@ -25,6 +40,7 @@
             placeholder="全部"
             clearable
             style="width: 180px"
+            @change="onProjectChange"
           >
             <el-option v-for="v in filtersData.projects" :key="v" :label="v" :value="v" />
           </el-select>
@@ -117,6 +133,7 @@
                   <el-tag :type="stateMeta(row.jobStatus).type" size="small">{{ row.jobStatusLabel }}</el-tag>
                 </el-descriptions-item>
                 <el-descriptions-item label="所属用户">{{ row.userName }}</el-descriptions-item>
+                <el-descriptions-item label="数据库">{{ row.database }}</el-descriptions-item>
                 <el-descriptions-item label="项目">{{ row.project }}</el-descriptions-item>
                 <el-descriptions-item label="提交时间">{{ fmtTime(row.commitTime) }}</el-descriptions-item>
                 <el-descriptions-item label="作业名称">{{ row.jobDesc }}</el-descriptions-item>
@@ -124,6 +141,8 @@
                   <el-progress :percentage="row.jobProcess" :stroke-width="14" />
                 </el-descriptions-item>
                 <el-descriptions-item label="工区">{{ row.survey }}</el-descriptions-item>
+                <el-descriptions-item label="测线">{{ row.line || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="控制结点">{{ row.ctrlNode || '-' }}</el-descriptions-item>
                 <el-descriptions-item label="运行耗时">{{ fmtDuration(row.execTime) }}</el-descriptions-item>
                 <el-descriptions-item label="退出码">
                   <span v-if="row.exitCode === 0" class="muted">0</span>
@@ -142,6 +161,7 @@
           </template>
         </el-table-column>
         <el-table-column prop="userName" label="用户" width="110" />
+        <el-table-column prop="database" label="数据库" width="130" show-overflow-tooltip />
         <el-table-column prop="project" label="项目" width="120" show-overflow-tooltip />
         <el-table-column prop="survey" label="工区" width="120" show-overflow-tooltip />
         <el-table-column label="测线" width="110" show-overflow-tooltip>
@@ -259,8 +279,11 @@ watch(onlyMine, (v) => {
 
 // Multi-select filter values. Status is number[] (enum codes); the rest are
 // string[] populated from the /jobs/filters endpoint.
+// database/project/survey 具有层次隶属关系：工区属于项目，项目属于数据库。
+// 选中上级时下级候选值会级联收窄（见 onDatabaseChange/onProjectChange）。
 const filter = reactive({
   jobStatus: [] as number[],
+  database: [] as string[],
   project: [] as string[],
   survey: [] as string[],
   userName: [] as string[],
@@ -278,6 +301,35 @@ async function loadFilters() {
   }
 }
 
+// 按当前已选 database/project 级联拉取下级候选值，并剔除已失效的下级选中项。
+async function refreshCascadedFilters() {
+  try {
+    const next = await getJobFilters({
+      database: filter.database.length ? filter.database : undefined,
+      project: filter.project.length ? filter.project : undefined,
+    })
+    // databases/users 始终全量，用最新值；projects/surveys 为级联收窄后的值。
+    filtersData.value = next
+    // 剔除已不在候选范围内的选中项，避免提交无效过滤条件。
+    const projSet = new Set(next.projects)
+    const surveySet = new Set(next.surveys)
+    filter.project = filter.project.filter((v) => projSet.has(v))
+    filter.survey = filter.survey.filter((v) => surveySet.has(v))
+  } catch (e) {
+    console.error('refresh cascaded filters failed', e)
+  }
+}
+
+// 数据库变化：收窄 project/survey 候选值，并清除已失效的下级选中项。
+function onDatabaseChange() {
+  void refreshCascadedFilters()
+}
+
+// 项目变化：收窄 survey 候选值，并清除已失效的 survey 选中项。
+function onProjectChange() {
+  void refreshCascadedFilters()
+}
+
 async function load() {
   loading.value = true
   try {
@@ -287,6 +339,7 @@ async function load() {
       page: page.value,
       pageSize: pageSize.value,
       jobStatus: filter.jobStatus.length ? filter.jobStatus : undefined,
+      database: filter.database.length ? filter.database : undefined,
       project: filter.project.length ? filter.project : undefined,
       survey: filter.survey.length ? filter.survey : undefined,
       userName: userNameParam.length ? userNameParam : undefined,
@@ -307,12 +360,15 @@ function onSearch() {
 }
 function onReset() {
   filter.jobStatus = []
+  filter.database = []
   filter.project = []
   filter.survey = []
   filter.userName = []
   filter.jobDesc = ''
   onlyMine.value = false
   page.value = 1
+  // 重置后级联候选值恢复全量。
+  void loadFilters()
   void load()
 }
 function onOnlyMineChange() {
